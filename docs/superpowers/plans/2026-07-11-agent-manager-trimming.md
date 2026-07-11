@@ -36,12 +36,11 @@ The repository currently has a large unstaged deletion set inherited from the up
 - `src-tauri/src/commands/settings.rs`, `src/components/DatabaseUpgrade.tsx`, `src/contexts/UpdateContext.tsx`, `src/lib/updater.ts`, `src/components/UpdateBadge.tsx`: remove self-update behavior after the updater safety shutdown is in place.
 - `src-tauri/tauri.conf.json`, `package.json`, `src-tauri/Cargo.toml`, lockfiles, icons, localization, and app metadata: final branding and resource/dependency cleanup.
 
-## Task 1: Establish a Clean Baseline and Lifecycle Characterization Tests
+## Task 1: Establish a Clean Baseline and Lifecycle Inventory
 
 **Files:**
-- Create: `tests/components/AgentLifecyclePage.characterization.test.tsx` only if existing test setup can render the extracted lifecycle component; otherwise add the smallest focused test beside the component.
-- Create/Modify: `src/components/settings/AboutSection.tsx` only if a test seam/export is required; do not refactor behavior yet.
-- Inspect only: `src/lib/api/settings.ts`, `src-tauri/src/commands/misc.rs`, existing `tests/components/*` and `tests/utils/*`.
+- Inspect only: `src/components/settings/AboutSection.tsx`, `src/components/settings/ToolInstallRow.tsx`, `src/components/settings/ToolUpgradeConfirmDialog.tsx`, `src/lib/api/settings.ts`, `src-tauri/src/commands/misc.rs`, `tests/components/SettingsDialog.test.tsx`, and `tests/components/ProviderList.test.tsx` for established mocking conventions.
+- Create/Modify: none in this task. Characterization tests are written after `src/components/AgentLifecyclePage.tsx` exists in Task 3.
 
 - [ ] **Step 1: Record the baseline and verify the committed design.**
 
@@ -54,52 +53,33 @@ git diff --exit-code -- docs/superpowers/specs/2026-07-11-agent-manager-trimming
 
 Expected: the existing upstream documentation deletions remain unstaged; the design file matches commit `fa68eab`; no application file is changed.
 
-- [ ] **Step 2: Inspect the retained interfaces before writing tests.**
-
-Confirm these signatures and constants are unchanged:
-
-```text
-settingsApi.getToolVersions(tools?, wslShellByTool?)
-settingsApi.runToolLifecycleAction(tools, action, wslShellByTool?)
-settingsApi.probeToolInstallations(tools)
-VALID_TOOLS = claude, codex, gemini, opencode, openclaw, hermes
-```
-
-Expected: the frontend calls those three APIs and the Rust commands remain registered from `src-tauri/src/lib.rs`.
-
-- [ ] **Step 3: Add characterization tests for the lifecycle UI contract.**
-
-Test the extracted/future component’s observable contract with mocked `settingsApi` calls:
-
-```text
-render shows all six tool names;
-initial load calls getToolVersions once per tool or through the existing equivalent flow;
-install/update invokes runToolLifecycleAction with the selected tool and action;
-diagnose invokes probeToolInstallations and renders a conflict result;
-failed lifecycle calls produce the existing error toast path;
-the batch path continues to process independent tool results according to existing behavior.
-```
-
-Do not assert implementation details such as hook order, CSS, or a new command shape.
-
-- [ ] **Step 4: Run the focused characterization tests.**
+- [ ] **Step 2: Inventory the current lifecycle surface.**
 
 Run:
 
 ```bash
-pnpm test:unit -- tests/components/AgentLifecyclePage.characterization.test.tsx
+rg -n "getToolVersions|runToolLifecycleAction|probeToolInstallations|TOOL_NAMES|executeRun|handleRunToolAction|handleDiagnoseAll" src/components/settings/AboutSection.tsx src/lib/api/settings.ts
+rg -n "VALID_TOOLS|get_tool_versions|run_tool_lifecycle_action|probe_tool_installations|build_tool_lifecycle_command" src-tauri/src/commands/misc.rs src-tauri/src/lib.rs
 ```
 
-Expected: tests pass against the current behavior, or any pre-existing test-environment failure is recorded with its exact output before proceeding.
+Expected before refactoring: `AboutSection.tsx` contains the lifecycle handlers and calls the three `settingsApi` methods; `misc.rs` contains `VALID_TOOLS` with six entries and the three Tauri commands; `lib.rs` registers all three commands.
 
-- [ ] **Step 5: Commit only the characterization test if it is independently useful.**
+- [ ] **Step 3: Confirm the current test seam and baseline commands.**
+
+Run:
 
 ```bash
-git add tests/components/AgentLifecyclePage.characterization.test.tsx
-git commit -m "test: characterize retained agent lifecycle UI"
+rg -n "vi\.mock|render\(|userEvent|screen\.getBy|settingsApi" tests/components/SettingsDialog.test.tsx tests/components/ProviderList.test.tsx
+pnpm test:unit -- tests/components/SettingsDialog.test.tsx tests/components/ProviderList.test.tsx
 ```
 
-If no new test file is needed because existing tests already cover every listed behavior, do not create an empty commit; record the evidence in the implementation PR/task notes instead.
+Expected: the search identifies the repository’s Vitest/Testing Library conventions and the selected baseline tests pass. Do not add tests for `AgentLifecyclePage` before that file exists.
+
+- [ ] **Step 4: Record the approved extraction test contract for Task 3.**
+
+Create no file yet. The Task 3 test must use the same `vi.mock`, `render`, `userEvent`, and `screen` setup found in Step 3 and assert only these observable behaviors after extraction: six tool labels render; initial `getToolVersions` receives the six tool names; install/update calls `runToolLifecycleAction([tool], action, shellPrefs)`; diagnosis calls `probeToolInstallations` and renders conflict rows; a rejected lifecycle call reaches the existing toast/error path. Batch behavior is characterized by asserting each requested tool is attempted in the existing serial loop, not by asserting a new backend command.
+
+No commit is created for this inventory-only task. The first implementation commit is Task 2.
 
 ## Task 2: Disable the Upstream Update Path Before Producing a Runnable Build
 
@@ -112,15 +92,15 @@ If no new test file is needed because existing tests already cover every listed 
 - Modify: `src/main.tsx`, `src/lib/api/settings.ts` as required to remove updater calls without changing retained lifecycle APIs.
 - Modify: `package.json`, `src-tauri/Cargo.toml`, lockfiles only after imports and plugin initialization are gone.
 
-- [ ] **Step 1: Add a static safety test/script for updater residue.**
+- [ ] **Step 1: Add a static safety check for updater residue.**
 
 Create a repository-local test or documented shell assertion that fails when application source/config contains either the upstream endpoint or updater public key:
 
 ```bash
-! git grep -n -E 'farion1231/cc-switch/releases|latest\.json|dW50cnVzdGVkIGNvbW1lbnQ6' -- ':!docs/superpowers/specs/*' ':!docs/superpowers/plans/*'
+git grep -n -E 'farion1231/cc-switch/releases|latest\.json|dW50cnVzdGVkIGNvbW1lbnQ6' -- package.json src src-tauri ':!src-tauri/Cargo.lock' || true
 ```
 
-Expected before implementation: FAIL because the current updater configuration is present. Keep the check focused on product source/config, not preserved MIT attribution.
+Expected before implementation: matches in `src-tauri/tauri.conf.json`, `src/components/settings/AboutSection.tsx`, and updater code. Expected after Task 2: no matches. Keep the check focused on product source/config, not preserved MIT attribution.
 
 - [ ] **Step 2: Remove the updater endpoint, updater public key, and updater artifact generation.**
 
@@ -151,19 +131,32 @@ Expected: all available compile/test gates pass; the final grep returns no produ
 - [ ] **Step 6: Commit the safety shutdown.**
 
 ```bash
-git add src-tauri/tauri.conf.json src-tauri/src/lib.rs src-tauri/src/commands/settings.rs src/main.tsx src/App.tsx src/components/settings/AboutSection.tsx src/components/DatabaseUpgrade.tsx src/contexts/UpdateContext.tsx src/components/UpdateBadge.tsx src/lib/updater.ts src/lib/api/settings.ts package.json src-tauri/Cargo.toml pnpm-lock.yaml src-tauri/Cargo.lock
+git diff --name-only
+git add -- src-tauri/tauri.conf.json src-tauri/src/lib.rs src-tauri/src/commands/settings.rs src/main.tsx src/App.tsx src/components/settings/AboutSection.tsx src/components/DatabaseUpgrade.tsx src/contexts/UpdateContext.tsx src/components/UpdateBadge.tsx src/lib/updater.ts src/lib/api/settings.ts package.json src-tauri/Cargo.toml pnpm-lock.yaml src-tauri/Cargo.lock
 git commit -m "chore: disable upstream CC Switch updater"
 ```
 
-Stage only files that actually changed; do not stage existing deleted docs.
+Review `git diff --name-only` first and stage only changed paths from the explicit Task 2 inventory; do not stage existing deleted docs.
 
 ## Task 3: Extract the Lifecycle UI Without Changing Behavior
 
 **Files:**
 - Create: `src/components/AgentLifecyclePage.tsx`
 - Modify: `src/components/settings/AboutSection.tsx`
-- Modify: `src/components/settings/ToolInstallRow.tsx`, `src/components/settings/ToolUpgradeConfirmDialog.tsx` only if props currently depend on settings-only state.
+- Inspect `src/components/settings/ToolInstallRow.tsx` and `src/components/settings/ToolUpgradeConfirmDialog.tsx`; check their current prop types for updater/settings-only state, and list any modified file in the Task 3 staging review.
 - Test: `tests/components/AgentLifecyclePage.characterization.test.tsx` or the existing lifecycle component test.
+
+- [ ] **Step 0: Write the failing extraction test.**
+
+Create `tests/components/AgentLifecyclePage.characterization.test.tsx` using the setup conventions identified in Task 1. Mock `@/lib/api` or `@/lib/api/settings` at the same module boundary used by the existing tests, provide deterministic six-tool version results, and assert the five behaviors recorded in Task 1 Step 4. The test must initially fail with a module-not-found error because `src/components/AgentLifecyclePage.tsx` does not exist.
+
+- [ ] **Step 0a: Run the failing extraction test.**
+
+```bash
+pnpm test:unit -- tests/components/AgentLifecyclePage.characterization.test.tsx
+```
+
+Expected: FAIL because `src/components/AgentLifecyclePage.tsx` has not been created; no application behavior has been changed yet.
 
 - [ ] **Step 1: Define the extracted component boundary.**
 
@@ -179,7 +172,7 @@ Keep the existing `TOOL_NAMES`, tool display names, WSL shell options, `executeR
 
 - [ ] **Step 2: Make the old AboutSection unavailable to the product surface.**
 
-Replace the lifecycle JSX in `AboutSection` with the new component only if the settings page remains temporarily reachable for a test transition. The final single-page shell must import `AgentLifecyclePage` directly; `AboutSection` must not be the source of lifecycle behavior in two places.
+Do not duplicate lifecycle behavior: the final single-page shell imports `AgentLifecyclePage` directly. If an intermediate compile requires `AboutSection` to remain temporarily reachable, replace its lifecycle JSX with a direct `AgentLifecyclePage` render and remove that compatibility route in Task 4; then delete the unused `AboutSection` export.
 
 - [ ] **Step 3: Run focused tests and static API checks.**
 
@@ -192,12 +185,24 @@ pnpm typecheck
 
 Expected: lifecycle tests pass and `git grep` shows only the extracted component calling the three retained lifecycle APIs from the frontend.
 
-- [ ] **Step 4: Commit the extraction.**
+- [ ] **Step 4: Run the green extraction test.**
 
 ```bash
-git add src/components/AgentLifecyclePage.tsx src/components/settings/AboutSection.tsx src/components/settings/ToolInstallRow.tsx src/components/settings/ToolUpgradeConfirmDialog.tsx tests/components/AgentLifecyclePage.characterization.test.tsx
+pnpm test:unit -- tests/components/AgentLifecyclePage.characterization.test.tsx
+pnpm typecheck
+```
+
+Expected: the characterization assertions pass and the extracted component compiles without changing the three retained API signatures.
+
+- [ ] **Step 5: Commit the extraction.**
+
+```bash
+git diff --name-only
+git add -- src/components/AgentLifecyclePage.tsx src/components/settings/AboutSection.tsx src/components/settings/ToolInstallRow.tsx src/components/settings/ToolUpgradeConfirmDialog.tsx tests/components/AgentLifecyclePage.characterization.test.tsx
 git commit -m "refactor: extract agent lifecycle page"
 ```
+
+Review `git diff --name-only` first; stage only these changed paths.
 
 ## Task 4: Establish the Single-Page Shell
 
@@ -205,7 +210,7 @@ git commit -m "refactor: extract agent lifecycle page"
 - Modify: `src/App.tsx`
 - Modify: `src/main.tsx`
 - Modify: `src/index.css` only for lifecycle-page layout needs
-- Modify: `src/components/theme-provider.tsx` or shared UI only if required by existing theme behavior
+- Inspect `src/components/theme-provider.tsx`; retain it unchanged unless the single-page shell has a concrete compile/runtime regression, and list it in the Task 4 staging review when changed.
 - Test: `tests/components/AgentLifecyclePage.characterization.test.tsx` and a new `tests/components/App.single-page.test.tsx` if current App tests do not cover routing.
 
 - [ ] **Step 1: Add a failing shell test.**
@@ -224,7 +229,7 @@ Remove the active-app/provider state, provider queries/actions, view union, prov
 
 - [ ] **Step 3: Keep only required bootstrap providers.**
 
-In `src/main.tsx`, retain `QueryClientProvider` only if `AgentLifecyclePage` still uses existing query infrastructure, retain `ThemeProvider`, i18n, and `Toaster`, and remove `UpdateProvider`, `DatabaseUpgrade`, update listeners, and unrelated imports. Do not replace Tauri lifecycle APIs with a new frontend service.
+In `src/main.tsx`, retain `QueryClientProvider` when `AgentLifecyclePage` imports the existing query client; otherwise remove it after the typecheck proves no query consumer remains. Retain `ThemeProvider`, i18n, and `Toaster`; remove `UpdateProvider`, `DatabaseUpgrade`, update listeners, and unrelated imports. Do not replace Tauri lifecycle APIs with a new frontend service.
 
 - [ ] **Step 4: Run shell gates.**
 
@@ -239,9 +244,12 @@ Expected: one main page loads, lifecycle controls remain reachable, and no exclu
 - [ ] **Step 5: Commit the single-page shell.**
 
 ```bash
-git add src/App.tsx src/main.tsx src/index.css src/components/theme-provider.tsx tests/components/App.single-page.test.tsx tests/components/AgentLifecyclePage.characterization.test.tsx
+git diff --name-only
+git add -- src/App.tsx src/main.tsx src/index.css src/components/theme-provider.tsx tests/components/App.single-page.test.tsx tests/components/AgentLifecyclePage.characterization.test.tsx
 git commit -m "feat: make agent lifecycle the single product surface"
 ```
+
+Review `git diff --name-only` first; stage only these changed paths.
 
 ## Task 5: Apply Agent Manager Metadata and Branding
 
@@ -249,8 +257,8 @@ git commit -m "feat: make agent lifecycle the single product surface"
 - Modify: `package.json`
 - Modify: `src-tauri/Cargo.toml`
 - Modify: `src-tauri/tauri.conf.json`
-- Modify: `src/index.html`, `src/components/AgentLifecyclePage.tsx`, retained translations under `src/i18n/`
-- Modify: `src/assets/icons/*`, `src-tauri/icons/*`, bundle templates/manifests where the current product name is user-visible
+- Modify: `src/index.html`, `src/components/AgentLifecyclePage.tsx`, `src/i18n/index.ts`, and `src/i18n/locales/en.json`, `src/i18n/locales/ja.json`, `src/i18n/locales/zh.json`, `src/i18n/locales/zh-TW.json`
+- Modify: `src/assets/icons/app-icon.png`, `src-tauri/icons/32x32.png`, `src-tauri/icons/128x128.png`, `src-tauri/icons/128x128@2x.png`, `src-tauri/icons/icon.icns`, `src-tauri/icons/icon.ico`, and only existing bundle metadata files confirmed by `rg --files src-tauri`
 - Preserve: `LICENSE` and explicit upstream attribution/source notice.
 
 - [ ] **Step 1: Add a metadata residue scan before changing values.**
@@ -258,13 +266,15 @@ git commit -m "feat: make agent lifecycle the single product surface"
 Run:
 
 ```bash
+rg --files src src-tauri | sort | rg '(^|/)(index\.html|i18n|locales|app-icon\.png|icons|.*\.yml$|.*\.xml$)'
+git grep -n -i -E 'CC Switch|cc-switch|ccswitch|com\.ccswitch\.desktop|farion1231/cc-switch' -- package.json src src-tauri ':!src-tauri/Cargo.lock' || true
 ```
 
-Expected: output identifies every product-visible or configuration identity that must be classified as either removable branding or preserved attribution.
+Expected before implementation: `src/index.html`, the four locale files, current icons, and current CC Switch metadata are listed. The grep identifies every product-visible/configuration identity to classify as removable branding or preserved attribution.
 
 - [ ] **Step 2: Rename product metadata without changing lifecycle version semantics.**
 
-Set product/package descriptions and visible names to `Agent Manager`. Choose a new stable bundle identifier and protocol-free configuration identity only after confirming no retained code uses the old identifier for lifecycle paths. Keep versioning policy explicit: do not claim an upstream CC Switch release identity for a branded Agent Manager release unless the controller chooses that policy.
+Set the product name and descriptions to `Agent Manager`, set the bundle identifier to `com.agentmanager.desktop`, and set `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json` version to `0.1.0`. This is the explicit initial Agent Manager version policy; the imported CC Switch `3.16.5` remains documented only as the source baseline and is not presented as the product version.
 
 - [ ] **Step 3: Replace visible branding and resources.**
 
@@ -275,16 +285,20 @@ Update window title, HTML title, lifecycle-page heading, alt text, icons, bundle
 ```bash
 pnpm typecheck
 pnpm build:renderer
+git grep -n -i -E 'CC Switch|cc-switch|ccswitch|com\.ccswitch\.desktop|farion1231/cc-switch' -- package.json src src-tauri ':!src-tauri/Cargo.lock' ':!LICENSE' || true
 ```
 
-Expected: no product-visible CC Switch identity or old bundle identifier remains; any retained attribution is outside the scanned product metadata or explicitly documented.
+Expected after implementation: no product-visible CC Switch identity or old bundle identifier remains; any remaining match is an explicit upstream attribution/source notice.
 
 - [ ] **Step 5: Commit branding.**
 
 ```bash
-git add package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json src/index.html src src-tauri/icons src-tauri/*.yml src-tauri/*.xml
+git diff --name-only
+git add -- package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json src/index.html src/components/AgentLifecyclePage.tsx src/i18n/index.ts src/i18n/locales/en.json src/i18n/locales/ja.json src/i18n/locales/zh.json src/i18n/locales/zh-TW.json src/assets/icons/app-icon.png src-tauri/icons/32x32.png src-tauri/icons/128x128.png src-tauri/icons/128x128@2x.png src-tauri/icons/icon.icns src-tauri/icons/icon.ico
 git commit -m "rebrand: rename product to Agent Manager"
 ```
+
+Review `git diff --name-only` first and add only existing paths from this Task 5 inventory. The explicit path list above is the complete branding staging allowlist.
 
 ## Task 6: Disconnect and Delete Excluded Frontend Feature Domains
 
@@ -292,16 +306,19 @@ git commit -m "rebrand: rename product to Agent Manager"
 - Modify: `src/App.tsx` and retained page shell files
 - Delete only after reference checks: provider components/hooks/API, proxy/routing/failover components/hooks/API, usage/session/workspace components/hooks/API, MCP/skills/prompts/profile/import-export/sync components/hooks/API, OpenClaw/Hermes configuration panels/hooks
 - Modify/Delete: `src/types.ts` and feature-specific type files after all imports are removed
-- Modify: `src/i18n/*` to remove only unreachable keys/locales while retaining lifecycle, theme, shell, and error strings.
+- Modify: `src/i18n/index.ts`, `src/i18n/locales/en.json`, `src/i18n/locales/ja.json`, `src/i18n/locales/zh.json`, and `src/i18n/locales/zh-TW.json` to remove only unreachable keys while retaining lifecycle, theme, shell, and error strings.
 
 - [ ] **Step 1: Generate a feature-domain reference inventory.**
 
 For each excluded domain, run:
 
 ```bash
+rg -n "Provider|proxy|failover|usage|session|workspace|Mcp|mcp|Skill|skill|Prompt|prompt|Profile|profile|Webdav|S3|sync|openclaw|hermes" src --glob '!components/AgentLifecyclePage.tsx' --glob '!lib/api/settings.ts'
+rg -n "Provider|proxy|failover|usage|session|workspace|Mcp|mcp|Skill|skill|Prompt|prompt|Profile|profile|Webdav|S3|sync|openclaw|hermes" src-tauri/src --glob '!commands/misc.rs'
+git ls-files 'src/components/**' 'src/hooks/**' 'src/lib/api/**' 'src-tauri/src/**' | sort
 ```
 
-Classify each hit as reachable from `AgentLifecyclePage`, required shared infrastructure, or delete candidate. Do not delete a file solely because its directory name is excluded.
+Expected before deletion: matches identify excluded entry points and their callers; `misc.rs` is excluded from the backend search so its retained six-tool implementation is not mistaken for removable feature code. Classify each hit as reachable from `AgentLifecyclePage`, required shared infrastructure, or delete candidate. Do not delete a file solely because its directory name is excluded.
 
 - [ ] **Step 2: Add a reachable-surface test.**
 
@@ -321,24 +338,28 @@ Remove component/domain files proven unreachable. Remove only translation namesp
 pnpm typecheck
 pnpm test:unit
 pnpm build:renderer
+rg -n "ProviderList|ProxyToggle|UsageDashboard|SessionManagerPage|WorkspaceFilesPanel|UnifiedMcpPanel|SkillsPage|PromptPanel|ProfileSwitcher" src || true
 ```
 
-Expected: compile/tests/build pass; no excluded component is imported from the product entry; retained lifecycle UI remains the only reachable feature surface.
+Expected: compile/tests/build pass; the final `rg` returns no excluded component import or render from the product entry; retained lifecycle UI remains the only reachable feature surface.
 
 - [ ] **Step 6: Commit frontend deletion batch.**
 
 ```bash
-git add src tests
+git diff --name-only
+git add -- src/App.tsx src/main.tsx src/components/AgentLifecyclePage.tsx src/components/settings/AboutSection.tsx src/components/settings/ToolInstallRow.tsx src/components/settings/ToolUpgradeConfirmDialog.tsx src/i18n/index.ts src/i18n/locales/en.json src/i18n/locales/ja.json src/i18n/locales/zh.json src/i18n/locales/zh-TW.json tests/components/App.single-page.test.tsx tests/components/AgentLifecyclePage.characterization.test.tsx
 git commit -m "refactor: remove excluded frontend features"
 ```
+
+Review `git diff --name-only`, then add only changed paths from the approved Task 6 inventory. For deleted files, use explicit pathspecs printed by `git diff --name-only` and reviewed for this task; never use `git add src` or `git add tests`.
 
 ## Task 7: Map OpenClaw/Hermes Shared Boundaries Before Backend Deletion
 
 **Files:**
 - Inspect/modify: `src-tauri/src/commands/misc.rs`
 - Inspect: `src-tauri/src/openclaw_config.rs`, `src-tauri/src/hermes_config.rs`, `src-tauri/src/commands/openclaw.rs`, `src-tauri/src/commands/hermes.rs`
-- Modify: `src/lib/api/settings.ts` and lifecycle types only if unrelated OpenClaw/Hermes API exports keep excluded imports alive.
-- Create: `docs/superpowers/plans/2026-07-11-agent-manager-openclaw-hermes-boundary.md` only if the implementer needs a committed mapping artifact; otherwise keep the mapping in the task review.
+- Inspect `src/lib/api/settings.ts` and lifecycle types; modify them only for concrete unused OpenClaw/Hermes exports identified by the Task 7 reference commands.
+- Record the shared-boundary matrix in the implementation review; create no additional plan artifact.
 
 - [ ] **Step 1: Record the retained/shared/excluded matrix.**
 
@@ -352,6 +373,15 @@ Excluded: OpenClaw/Hermes provider/config panels, health/config/default-model/en
 Shared: tool names/display labels, environment/path helpers, generic errors, and any
         serialization types directly required by retained probe/install code.
 ```
+
+Run:
+
+```bash
+rg -n "VALID_TOOLS|get_tool_versions|run_tool_lifecycle_action|probe_tool_installations|ToolLifecycleAction|build_tool_action_line|wsl_distro_for_tool" src-tauri/src/commands/misc.rs
+rg -n "openclaw|hermes|OpenClaw|Hermes" src-tauri/src/commands/openclaw.rs src-tauri/src/commands/hermes.rs src-tauri/src/openclaw_config.rs src-tauri/src/hermes_config.rs src/components
+```
+
+Expected before deletion: the first command returns retained lifecycle definitions and the second identifies configuration-only callers. Record exact retained/shared/excluded paths in the task review before deleting anything.
 
 - [ ] **Step 2: Add/retain characterization tests for all six tools.**
 
@@ -375,9 +405,12 @@ Expected: six-tool lifecycle command planning still compiles/tests; no OpenClaw/
 - [ ] **Step 5: Commit the shared-boundary deletion.**
 
 ```bash
-git add src src-tauri/src tests
+git diff --name-only
+git add -- src/components/AgentLifecyclePage.tsx src/components/settings/AboutSection.tsx src/lib/api/settings.ts src-tauri/src/commands/misc.rs src-tauri/src/commands/mod.rs src-tauri/src/commands/openclaw.rs src-tauri/src/commands/hermes.rs src-tauri/src/openclaw_config.rs src-tauri/src/hermes_config.rs tests/components/AgentLifecyclePage.characterization.test.tsx
 git commit -m "refactor: keep only OpenClaw and Hermes lifecycle support"
 ```
+
+Review `git diff --name-only` and stage only existing changed paths from the recorded matrix. Add explicitly deleted paths only after confirming they are configuration-only and not imported by `misc.rs`.
 
 ## Task 8: Prune Backend Startup Side Effects and Commands
 
@@ -389,7 +422,7 @@ git commit -m "refactor: keep only OpenClaw and Hermes lifecycle support"
 
 - [ ] **Step 1: Characterize startup behavior before pruning.**
 
-Run the current application in a test environment and capture startup logs, then inspect `src-tauri/src/lib.rs` for:
+Run a non-destructive source-level characterization and inspect `src-tauri/src/lib.rs` for:
 
 ```text
 Database::init and migrations;
@@ -402,7 +435,12 @@ tray menu construction and provider/usage refresh;
 skill migration and other provider migrations.
 ```
 
-Expected: a written retained/deleted startup table showing exactly which initialization is needed by `AgentLifecyclePage` and which is excluded side effect.
+```bash
+rg -n "Database::init|AppState::new|restore_proxy_state_on_startup|UsageCache|webdav|s3_sync|deep_link|register_all|create_tray|migrate_skill|start_worker|invoke_handler" src-tauri/src/lib.rs src-tauri/src/commands src-tauri/src/services
+rg -n "State<'_, AppState>|State<AppState>|AppState" src-tauri/src/commands/misc.rs src-tauri/src/commands/settings.rs src-tauri/src/commands
+```
+
+Expected: the first command lists startup side effects and the second proves whether retained lifecycle commands require `AppState`. Mandatory verification is source-level and uses no user configuration, database, network worker, or agent process. Record a retained/deleted startup table before editing.
 
 - [ ] **Step 2: Replace the startup composition with the minimum retained composition.**
 
@@ -430,9 +468,12 @@ Expected: Rust checks pass; excluded workers/services are absent from startup an
 - [ ] **Step 6: Commit backend startup and command pruning.**
 
 ```bash
-git add src-tauri/src
+git diff --name-only
+git diff --name-only -z -- src-tauri/src/lib.rs src-tauri/src/commands/mod.rs src-tauri/src/commands/misc.rs src-tauri/src/commands/settings.rs src-tauri/src/settings.rs src-tauri/src/store.rs 'src-tauri/src/database/**' 'src-tauri/src/services/**' src-tauri/src/tray.rs src-tauri/src/usage_events.rs 'src-tauri/src/session_manager/**' | xargs -0 -r git add --
 git commit -m "refactor: prune excluded backend startup and commands"
 ```
+
+Review the first `git diff --name-only`, then use the second command to stage only changed paths under the approved startup inventory. Never use `git add src-tauri/src` or a whole-repository stage.
 
 ## Task 9: Remove Deep Link as a Complete Feature Domain
 
@@ -441,14 +482,15 @@ git commit -m "refactor: prune excluded backend startup and commands"
 - Modify: `src-tauri/src/lib.rs`, `src-tauri/src/commands/mod.rs`
 - Modify: `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`
 - Modify: `src-tauri/tauri.conf.json`
-- Modify: frontend API/types/tests only if any deep-link import remains after Task 6.
+- Inspect frontend API/types/tests for deep-link imports after Task 6; modify concrete files returned by the Task 9 residue command when matches remain, and record that path list in the Task 9 staging review.
 
 - [ ] **Step 1: Add a failing residue check.**
 
 ```bash
+rg -n -i "deep.?link|ccswitch://|tauri-plugin-deep-link|register_all|on_open_url|parse_deeplink|merge_deeplink|import_from_deeplink" src src-tauri package.json src-tauri/tauri.conf.json
 ```
 
-Expected before deletion: matches in Rust handlers, plugin setup, Tauri scheme configuration, and possibly frontend imports.
+Expected before deletion: matches in Rust handlers, plugin setup, Tauri scheme configuration, and possibly frontend imports. Expected after Task 9: `rg` exits 1 and prints no matches.
 
 - [ ] **Step 2: Remove frontend deep-link entry points and commands.**
 
@@ -468,16 +510,20 @@ Remove `tauri-plugin-deep-link` from Cargo manifests/lockfile and remove `plugin
 cargo check --manifest-path src-tauri/Cargo.toml
 pnpm typecheck
 pnpm test:unit
+rg -n -i "deep.?link|ccswitch://|tauri-plugin-deep-link|register_all|on_open_url|parse_deeplink|merge_deeplink|import_from_deeplink" src src-tauri package.json src-tauri/tauri.conf.json || true
 ```
 
-Expected: checks pass and the grep returns no source/config residue.
+Expected: checks pass and the final `rg` prints no source/config residue.
 
 - [ ] **Step 6: Commit deep-link removal.**
 
 ```bash
-git add src src-tauri package.json pnpm-lock.yaml
+git diff --name-only
+git diff --name-only -z -- src-tauri/src/lib.rs src-tauri/src/commands/mod.rs src-tauri/src/commands/deeplink.rs 'src-tauri/src/deeplink/**' src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/tauri.conf.json src/lib/api/deeplink.ts src/components/DeepLinkImportDialog.tsx | xargs -0 -r git add --
 git commit -m "refactor: remove CC Switch deep link integration"
 ```
+
+Review the first `git diff --name-only`, then use the second command to stage only changed paths from the Task 9 inventory. Do not use directory-wide staging.
 
 ## Task 10: Clean Dependencies, i18n, Resources, and Build Configuration
 
@@ -491,11 +537,12 @@ git commit -m "refactor: remove CC Switch deep link integration"
 For every candidate dependency, confirm usage with:
 
 ```bash
-git grep -n 'from "<package>"\|require("<package>")' -- src tests
-git grep -n '<crate-name>' -- src-tauri/src src-tauri/Cargo.toml
+rg --files src src-tauri | sort > /tmp/agent-manager-files.txt
+git grep -n -E 'from "(@tauri-apps/plugin-updater|@tauri-apps/plugin-deep-link)"|require\("(@tauri-apps/plugin-updater|@tauri-apps/plugin-deep-link)"\)' -- src tests || true
+git grep -n -E 'tauri-plugin-(updater|deep-link)' -- src-tauri/src src-tauri/Cargo.toml || true
 ```
 
-Remove only packages/crates with zero retained references. Do not remove Tauri dialog/process/store or generic serialization/network/process crates until retained lifecycle code no longer uses them.
+Expected after Tasks 2 and 9: the candidate dependency commands return no matches; `/tmp/agent-manager-files.txt` provides the real resource inventory. For any additional candidate, replace the literal package/crate names in the command and require zero matches before removal. Do not remove Tauri dialog/process/store or generic serialization/network/process crates until retained lifecycle code no longer uses them.
 
 - [ ] **Step 2: Remove unreachable translations and resources.**
 
@@ -516,14 +563,17 @@ Expected: lockfiles reflect only declared dependencies and both package ecosyste
 - [ ] **Step 4: Commit cleanup.**
 
 ```bash
-git add package.json pnpm-lock.yaml src-tauri/Cargo.toml src-tauri/Cargo.lock src/i18n src/assets src-tauri/icons src-tauri/tauri.conf.json flatpak
+git diff --name-only
+git add -- package.json pnpm-lock.yaml src-tauri/Cargo.toml src-tauri/Cargo.lock src/i18n/index.ts src/i18n/locales/en.json src/i18n/locales/ja.json src/i18n/locales/zh.json src/i18n/locales/zh-TW.json src/assets/icons/app-icon.png src-tauri/icons/32x32.png src-tauri/icons/128x128.png src-tauri/icons/128x128@2x.png src-tauri/icons/icon.icns src-tauri/icons/icon.ico src-tauri/tauri.conf.json
 git commit -m "chore: clean Agent Manager dependencies and resources"
 ```
+
+Review `git diff --name-only` and stage only changed files from the Task 10 inventory. Add any other resource only after `rg --files` confirms it exists and the deletion is explicitly listed in the dependency/resource review.
 
 ## Task 11: Cross-Platform Verification and Final Residual Scans
 
 **Files:**
-- Modify only if verification finds a concrete regression: the smallest affected source/config file.
+- Modify the smallest affected source/config file when verification finds a concrete regression; when all checks pass, create no application change.
 - Create: `docs/superpowers/verification/2026-07-11-agent-manager-trimming.md` with command output, platform/build evidence, and scan results.
 
 - [ ] **Step 1: Run the required repository gates.**
@@ -541,7 +591,7 @@ Expected: all commands pass. Record exact failures instead of weakening tests or
 
 - [ ] **Step 2: Run lifecycle smoke checks on Windows and macOS.**
 
-For each platform, record:
+The mandatory check is a disposable, non-destructive smoke test: launch the built app with isolated `HOME`/`USERPROFILE` and mocked command executables placed first on `PATH`, so `--version` and installer subprocesses return deterministic results without touching global installs, PATH, or user configuration. For each platform, record:
 
 ```text
 application starts directly on the lifecycle page;
@@ -553,19 +603,22 @@ multi-install/PATH conflict diagnostics display the existing report/confirmation
 no application updater request is made.
 ```
 
-Use the existing official agent distribution channels and a disposable test profile; do not alter user PATH or remove duplicate installations.
+The mock harness must cover installed, missing, broken, update-success, update-no-op, batch partial-failure, and multi-install/PATH-conflict report cases. Do not run real installer commands in mandatory CI or smoke verification. Optional authorized live-agent install/upgrade testing may be performed only by a human in a disposable VM/profile after explicit approval; it is not required for plan completion and must not modify the user’s global environment.
 
 - [ ] **Step 3: Verify WSL and shell behavior on Windows.**
 
-Exercise the existing `wslShellByTool` selection through at least one WSL tool and record that shell selection, `--version` detection, install/update command execution, and error propagation remain unchanged.
+Use a mocked `wsl.exe` on `PATH` that records arguments and returns deterministic version/install results. Exercise `wslShellByTool` through the existing frontend/API path and assert the selected shell/flag is passed unchanged, without starting a real WSL distribution or installing an agent. Optional authorized live WSL validation is separate and not mandatory.
 
 - [ ] **Step 4: Run final source/config residue scans.**
 
 ```bash
-git grep -n -E 'start_worker|UsageCache|ProxyService|webdav|s3_sync|register_all|on_open_url|install_update_and_restart|check_app_update_available' -- src src-tauri || true
+rg -n -i -E 'CC Switch|cc-switch|ccswitch|com\.ccswitch\.desktop|farion1231/cc-switch|latest\.json|tauri-plugin-updater|tauri-plugin-deep-link|ccswitch://|Provider|proxy|failover|usage|session|workspace|MCP|skill|prompt|deep.?link' package.json src src-tauri --glob '!src-tauri/Cargo.lock' --glob '!LICENSE' || true
+rg -n -E 'start_worker|UsageCache|ProxyService|webdav|s3_sync|register_all|on_open_url|install_update_and_restart|check_app_update_available|check_for_updates' src src-tauri || true
+git diff --name-only
+git status --short
 ```
 
-Expected: only explicitly preserved upstream attribution/license or legitimate retained lifecycle terminology remains; no excluded command, plugin, worker, updater endpoint, old identity, or protocol is reachable/configured. Existing unrelated deletion entries remain unstaged.
+Expected after all tasks: no product/config matches for old branding, updater, deep link, excluded feature registrations, or startup workers; the second scan returns no removed updater/deep-link/startup symbol; only explicitly reviewed upstream attribution or legitimate retained lifecycle terminology may remain. `git diff --name-only` and `git status --short` show no staged inherited deletions.
 
 - [ ] **Step 5: Record evidence and commit verification notes.**
 
@@ -593,7 +646,7 @@ git commit -m "test: verify Agent Manager trimming"
 
 - [ ] Every spec section maps to at least one task: updater safety (Task 2), lifecycle extraction (Task 3), single page (Task 4), branding (Task 5), frontend/backend deletion (Tasks 6 and 8), startup side effects (Task 8), deep links (Task 9), OpenClaw/Hermes boundaries (Task 7), cleanup (Task 10), cross-platform verification (Task 11).
 - [ ] No task introduces a replacement lifecycle engine, new agent manifest, new command generator, PATH mutation, or duplicate-removal behavior.
-- [ ] Every code task has exact paths, interface names, test/compile commands, expected outcomes, and a focused commit step.
+- [ ] Every implementation task has exact paths, interface names, test/compile commands, expected pre/post results, and a focused commit step; inventory-only Task 1 intentionally has no code commit.
 - [ ] `DatabaseUpgrade` and `AboutSection` updater coupling is handled explicitly rather than left as a broken reference.
 - [ ] Deep-link removal covers frontend, Rust handlers, plugin initialization, Cargo dependency, Tauri scheme, and command registration.
 - [ ] OpenClaw/Hermes lifecycle definitions in `misc.rs` are protected from broad feature-domain deletion.
