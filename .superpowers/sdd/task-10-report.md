@@ -2,40 +2,71 @@
 
 ## Goal
 
-Audit the committed Task 10 cleanup state, remove remaining Rust warnings, and
-retain Windows-compatible persisted path resolution for lifecycle detection.
+Finish the Agent Manager dependency, translation, and resource cleanup without
+changing the lifecycle UI, its 15 frontend tests, inherited deletions, or
+`pnpm-workspace.yaml`.
 
 ## Changes
 
-- Removed the unused `set_proxy_port` and `validate_proxy` HTTP-client APIs and
-  their obsolete test calls. `get()` and its fallback client behavior are
-  unchanged.
-- Added the Windows-only `settings` module and declared it from `lib.rs`.
-- Retained read-only compatibility for `~/.cc-switch/settings.json`, including
-  the six existing `*_config_dir` keys and `~`/`~/...` expansion without
-  renaming persisted user paths.
-- No inherited deletions or `pnpm-workspace.yaml` changes were made.
+- Removed the unused `McpIcon`, the `claude-desktop` `AppConfig` entry, and the
+  corresponding `AppId` member.
+- Kept all four locale files and their active lifecycle, common, theme/header,
+  notification, MIT, and upstream-attribution content. The locale audit found
+  no additional unreachable keys in the current frontend surface.
+- Removed 102 zero-reference resources with explicit `git rm`:
+  - all 7 `assets/partners/banners/*` files;
+  - all 38 `assets/partners/logos/*` files;
+  - all 6 `assets/screenshots/*` files;
+  - `src/assets/icons/app-icon.png`, `chatgpt.svg`, and `claude.svg`;
+  - 48 unused Tauri outputs: root `64x64.png`, `icon.png`, `Square*`, and
+    `StoreLogo.png`, plus all `android/*`, `ios/*`, and `tray/macos/*` files;
+- Retained the six referenced Tauri resources: `32x32.png`, `128x128.png`,
+  `128x128@2x.png`, `icon.icns`, `icon.ico`, and `dmg-background.png`.
+  References were verified in `tauri.conf.json`, Flatpak metadata, and the
+  macOS release workflow.
+- Existing Task 10 dependency cleanup retains only the declared frontend and
+  Rust runtime surface. Removed frontend dependencies were:
+  `@testing-library/user-event`, `code-inspector-plugin`, `cross-fetch`, `msw`,
+  all CodeMirror packages, `@dnd-kit/core`, `@dnd-kit/sortable`,
+  `@dnd-kit/utilities`, `@hookform/resolvers`, `@lobehub/icons-static-svg`,
+  unused Radix packages, `@tanstack/react-query`, `@tanstack/react-virtual`,
+  Tauri dialog/process/store plugins, `cmdk`, `codemirror`, `flexsearch`,
+  `jsonc-parser`, `react-hook-form`, `recharts`, and `smol-toml`.
+- Removed Rust dependencies were the tray feature, opener/process/dialog/store
+  plugins, `toml`, `toml_edit`, `arboard`, compression/HTTP stack extras,
+  `rquickjs`, `thiserror`, `anyhow`, `zip`, `serde_yaml`, `auto-launch`,
+  database/crypto/model extras, and macOS/aarch64-only dependency blocks.
 
-## Strict Verification
+## Final Inventory
 
-- `cargo fmt -- --check`: passed.
-- `cargo check --manifest-path src-tauri/Cargo.toml`: passed with exactly 0
-  warnings and 0 errors.
-- `cargo test --manifest-path src-tauri/Cargo.toml`: passed, 69 tests, 0
-  failed, 0 ignored.
-- `corepack pnpm --version`: `11.10.0`.
+- Tracked Rust source files: **9**.
+- Tracked frontend source/config files (`src/**/*.ts`, `tsx`, `css`, `json`,
+  `svg`): **27**.
+- Tracked locale files: **4**.
+- Zero-reference residue: `McpIcon`, `claude-desktop`, updater/deep-link
+  packages/plugins, removed asset paths, and removed platform icon paths all
+  return zero matches across `src`, `tests`, `src-tauri`, manifests, and
+  platform configuration.
+
+## Verification
+
+- `corepack pnpm install --lockfile-only`: passed; lockfile already current.
 - `corepack pnpm typecheck`: passed.
-- `corepack pnpm test:unit`: passed, 3 files, 15 tests, 0 failed.
-- `corepack pnpm build:renderer`: passed.
-- Windows source compatibility was checked with
-  `cargo check --target x86_64-pc-windows-gnu`; compilation was blocked before
-  crate checking because `x86_64-pc-windows-gnu` is not installed in this
-  Linux environment (`E0463`, target unavailable).
+- `corepack pnpm test:unit`: passed, 3 files, 15 tests.
+- `corepack pnpm build:renderer`: passed; only existing Browserslist and chunk
+  size advisories remain.
+- `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`: passed.
+- `cargo check --manifest-path src-tauri/Cargo.toml`: passed with 0 warnings.
+- `cargo test --manifest-path src-tauri/Cargo.toml`: passed, 69 tests.
+- `git diff --check`: passed.
 
-## Warnings / Residue
+## Risks / Limitations
 
-- Native Linux Rust warning count is 0.
-- Frontend build emits only existing Browserslist/chunk-size advisories; no
-  build failure occurred.
 - Windows runtime and packaging smoke tests remain unavailable in this Linux
   environment.
+- Flatpak/macOS release jobs still reference the retained resources and were
+  not executed locally.
+
+## Status
+
+DONE
