@@ -286,6 +286,7 @@ if grep -E -i -n 'signing|codesign|tauri_signing|gh release|action-gh-release|cr
   exit 1
 fi
 expected_names=$'Agent-Manager-0.1.0-Windows.msi\nAgent-Manager-0.1.0-Windows-Portable.zip\nSHA256SUMS.txt'
+expected_names=$(printf '%s\n' "$expected_names" | sort -u)
 actual_names=$(grep -oE 'Agent-Manager-[0-9]+\.[0-9]+\.[0-9]+-Windows(-Portable)?\.(msi|zip)|SHA256SUMS\.txt' "$workflow" | sort -u)
 diff -u <(printf '%s\n' "$expected_names") <(printf '%s\n' "$actual_names")
 git diff --check
@@ -327,11 +328,11 @@ Add a PowerShell step after the Tauri build:
           Copy-Item $portableExe (Join-Path $portableStage 'agent-manager.exe')
           Compress-Archive -Path (Join-Path $portableStage 'agent-manager.exe') -DestinationPath (Join-Path $artifactDir 'Agent-Manager-0.1.0-Windows-Portable.zip') -CompressionLevel Optimal
 
-          $files = @(
-            'Agent-Manager-0.1.0-Windows.msi',
-            'Agent-Manager-0.1.0-Windows-Portable.zip'
-          )
-          $lines = foreach ($file in $files) {
+           $payloadFiles = @(
+             'Agent-Manager-0.1.0-Windows.msi',
+             'Agent-Manager-0.1.0-Windows-Portable.zip'
+           )
+           $lines = foreach ($file in $payloadFiles) {
             $hash = (Get-FileHash (Join-Path $artifactDir $file) -Algorithm SHA256).Hash.ToLowerInvariant()
             "$hash  $file"
           }
@@ -349,14 +350,14 @@ Expected: the step fails if the MSI is missing/ambiguous, the EXE is missing, ei
         run: |
           $ErrorActionPreference = 'Stop'
           $artifactDir = Join-Path $env:GITHUB_WORKSPACE 'internal-artifacts'
-          $expected = @(
-            'Agent-Manager-0.1.0-Windows.msi',
-            'Agent-Manager-0.1.0-Windows-Portable.zip',
-            'SHA256SUMS.txt'
-          )
-          $actual = @(Get-ChildItem $artifactDir -File | Select-Object -ExpandProperty Name)
-          if ((Compare-Object $expected $actual)) { throw "Artifact names do not match contract" }
-           foreach ($name in $expected) {
+           $payloadFiles = @(
+             'Agent-Manager-0.1.0-Windows.msi',
+             'Agent-Manager-0.1.0-Windows-Portable.zip'
+           )
+           $expectedArtifacts = @($payloadFiles + @('SHA256SUMS.txt') | Sort-Object)
+           $actualArtifacts = @(Get-ChildItem $artifactDir -File | Select-Object -ExpandProperty Name | Sort-Object)
+           if ((Compare-Object $expectedArtifacts $actualArtifacts)) { throw "Artifact names do not match contract" }
+            foreach ($name in $expectedArtifacts) {
              if ((Get-Item (Join-Path $artifactDir $name)).Length -le 0) { throw "Empty artifact: $name" }
            }
            $zipEntries = @(tar -tf (Join-Path $artifactDir 'Agent-Manager-0.1.0-Windows-Portable.zip'))
@@ -367,14 +368,14 @@ Expected: the step fails if the MSI is missing/ambiguous, the EXE is missing, ei
            foreach ($line in $manifestLines) {
              if ($line -cnotmatch '^(?<hash>[0-9a-f]{64})  (?<name>.+)$') { throw "Malformed SHA256SUMS.txt line: $line" }
              $name = $Matches.name
-             if (-not ($expected | Where-Object { $_ -ceq $name })) { throw "Unexpected checksum filename: $name" }
+             if (-not ($payloadFiles | Where-Object { $_ -ceq $name })) { throw "Unexpected checksum filename: $name" }
              if ($manifest.ContainsKey($name)) { throw "Duplicate checksum filename: $name" }
              $manifest[$name] = $Matches.hash
            }
-           foreach ($name in $expected) {
+           foreach ($name in $payloadFiles) {
              if (-not $manifest.ContainsKey($name)) { throw "Missing checksum filename: $name" }
            }
-           foreach ($name in $expected[0..1]) {
+           foreach ($name in $payloadFiles) {
              $freshHash = (Get-FileHash (Join-Path $artifactDir $name) -Algorithm SHA256).Hash.ToLowerInvariant()
              if ($manifest[$name] -cne $freshHash) { throw "Checksum mismatch for $name" }
            }
