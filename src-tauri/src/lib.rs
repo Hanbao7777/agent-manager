@@ -3,6 +3,8 @@ mod commands;
 mod linux_fix;
 mod panic_hook;
 mod proxy;
+#[cfg(target_os = "windows")]
+mod settings;
 
 use tauri::Manager;
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};

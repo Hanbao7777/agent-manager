@@ -19,21 +19,6 @@ static CURRENT_PROXY_URL: OnceCell<RwLock<Option<String>>> = OnceCell::new();
 /// CC Switch 代理服务器当前监听的端口
 static CC_SWITCH_PROXY_PORT: OnceCell<RwLock<u16>> = OnceCell::new();
 
-/// 设置 CC Switch 代理服务器的监听端口
-///
-/// 应在代理服务器启动时调用，以便系统代理检测能正确识别自己的端口
-pub fn set_proxy_port(port: u16) {
-    if let Some(lock) = CC_SWITCH_PROXY_PORT.get() {
-        if let Ok(mut current_port) = lock.write() {
-            *current_port = port;
-            log::debug!("[GlobalProxy] Updated CC Switch proxy port to {port}");
-        }
-    } else {
-        let _ = CC_SWITCH_PROXY_PORT.set(RwLock::new(port));
-        log::debug!("[GlobalProxy] Initialized CC Switch proxy port to {port}");
-    }
-}
-
 /// 获取 CC Switch 代理服务器的监听端口
 fn get_proxy_port() -> u16 {
     CC_SWITCH_PROXY_PORT
@@ -76,23 +61,6 @@ pub fn init(proxy_url: Option<&str>) -> Result<(), String> {
             .unwrap_or_else(|| "direct connection".to_string())
     );
 
-    Ok(())
-}
-
-/// 验证代理配置（不应用）
-///
-/// 只验证代理 URL 是否有效，不实际更新全局客户端。
-/// 用于在持久化之前验证配置的有效性。
-///
-/// # Arguments
-/// * `proxy_url` - 代理 URL，None 或空字符串表示直连
-///
-/// # Returns
-/// 验证成功返回 Ok(())，失败返回错误信息
-pub fn validate_proxy(proxy_url: Option<&str>) -> Result<(), String> {
-    let effective_url = proxy_url.filter(|s| !s.trim().is_empty());
-    // 只调用 build_client 来验证，但不应用
-    build_client(effective_url)?;
     Ok(())
 }
 
@@ -395,8 +363,6 @@ mod tests {
     #[test]
     fn test_proxy_points_to_loopback() {
         // 设置 CC Switch 代理端口为 15721（默认值）
-        set_proxy_port(15721);
-
         // 只有指向 CC Switch 自己端口的 loopback 地址才返回 true
         assert!(proxy_points_to_loopback("http://127.0.0.1:15721"));
         assert!(proxy_points_to_loopback("socks5://localhost:15721"));
@@ -416,8 +382,6 @@ mod tests {
         let _guard = env_lock().lock().unwrap();
 
         // 设置 CC Switch 代理端口
-        set_proxy_port(15721);
-
         let keys = [
             "HTTP_PROXY",
             "http_proxy",
