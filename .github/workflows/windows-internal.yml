@@ -38,7 +38,7 @@ jobs:
           if ((pnpm --version) -ne '10.12.3') { throw "Unexpected pnpm version" }
 
       - name: Setup Rust MSVC
-        uses: dtolnay/rust-toolchain@1.95.0
+        uses: dtolnay/rust-toolchain@1.100.0
         with:
           target: x86_64-pc-windows-msvc
           components: rustfmt, clippy
