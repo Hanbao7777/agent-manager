@@ -1,86 +1,24 @@
 #![allow(non_snake_case)]
 
-use crate::app_config::AppType;
-use crate::init_status::{InitErrorPayload, SkillsMigrationPayload};
-use crate::services::ProviderService;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use tauri::AppHandle;
-use tauri::State;
-use tauri_plugin_opener::OpenerExt;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AppType {
+    Claude,
+    ClaudeDesktop,
+    Gemini,
+    Codex,
+}
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
-
-/// 打开外部链接
-#[tauri::command]
-pub async fn open_external(app: AppHandle, url: String) -> Result<bool, String> {
-    let url = if url.starts_with("http://") || url.starts_with("https://") {
-        url
-    } else {
-        format!("https://{url}")
-    };
-
-    app.opener()
-        .open_url(&url, None::<String>)
-        .map_err(|e| format!("打开链接失败: {e}"))?;
-
-    Ok(true)
-}
-
-#[tauri::command]
-pub async fn copy_text_to_clipboard(text: String) -> Result<bool, String> {
-    // Use spawn_blocking to avoid blocking the async runtime
-    // Clipboard access can block on some platforms and may have thread/loop constraints
-    tokio::task::spawn_blocking(move || {
-        let mut clipboard =
-            arboard::Clipboard::new().map_err(|e| format!("访问系统剪贴板失败: {e}"))?;
-        clipboard
-            .set_text(text)
-            .map_err(|e| format!("写入系统剪贴板失败: {e}"))?;
-        Ok(true)
-    })
-    .await
-    .map_err(|e| format!("剪贴板任务执行失败: {e}"))?
-}
-
-/// 判断是否为便携版（绿色版）运行
-#[tauri::command]
-pub async fn is_portable_mode() -> Result<bool, String> {
-    let exe_path = std::env::current_exe().map_err(|e| format!("获取可执行路径失败: {e}"))?;
-    if let Some(dir) = exe_path.parent() {
-        Ok(dir.join("portable.ini").is_file())
-    } else {
-        Ok(false)
-    }
-}
-
-/// 获取应用启动阶段的初始化错误（若有）。
-/// 用于前端在早期主动拉取，避免事件订阅竞态导致的提示缺失。
-#[tauri::command]
-pub async fn get_init_error() -> Result<Option<InitErrorPayload>, String> {
-    Ok(crate::init_status::get_init_error())
-}
-
-/// 获取 JSON→SQLite 迁移结果（若有）。
-/// 只返回一次 true，之后返回 false，用于前端显示一次性 Toast 通知。
-#[tauri::command]
-pub async fn get_migration_result() -> Result<bool, String> {
-    Ok(crate::init_status::take_migration_success())
-}
-
-/// 获取 Skills 自动导入（SSOT）迁移结果（若有）。
-/// 只返回一次 Some({count})，之后返回 None，用于前端显示一次性 Toast 通知。
-#[tauri::command]
-pub async fn get_skills_migration_result() -> Result<Option<SkillsMigrationPayload>, String> {
-    Ok(crate::init_status::take_skills_migration_result())
-}
 
 #[derive(serde::Serialize)]
 pub struct ToolVersion {
@@ -2564,40 +2502,6 @@ fn wsl_distro_from_path(path: &Path) -> Option<String> {
     }
 }
 
-/// 打开指定提供商的终端
-///
-/// 根据提供商配置的环境变量启动一个带有该提供商特定设置的终端
-/// 无需检查是否为当前激活的提供商，任何提供商都可以打开终端
-#[allow(non_snake_case)]
-#[tauri::command]
-pub async fn open_provider_terminal(
-    state: State<'_, crate::store::AppState>,
-    app: String,
-    #[allow(non_snake_case)] providerId: String,
-    cwd: Option<String>,
-) -> Result<bool, String> {
-    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
-    let launch_cwd = resolve_launch_cwd(cwd)?;
-
-    // 获取提供商配置
-    let providers = ProviderService::list(state.inner(), app_type.clone())
-        .map_err(|e| format!("获取提供商列表失败: {e}"))?;
-
-    let provider = providers
-        .get(&providerId)
-        .ok_or_else(|| format!("提供商 {providerId} 不存在"))?;
-
-    // 从提供商配置中提取环境变量
-    let config = &provider.settings_config;
-    let env_vars = extract_env_vars_from_config(config, &app_type);
-
-    // 根据平台启动终端，传入提供商ID用于生成唯一的配置文件名
-    launch_terminal_with_env(env_vars, &providerId, launch_cwd.as_deref())
-        .map_err(|e| format!("启动终端失败: {e}"))?;
-
-    Ok(true)
-}
-
 /// 从提供商配置中提取环境变量
 fn extract_env_vars_from_config(
     config: &serde_json::Value,
@@ -2749,7 +2653,7 @@ fn write_claude_config(
 fn launch_macos_terminal(config_file: &std::path::Path, cwd: Option<&Path>) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
 
-    let preferred = crate::settings::get_preferred_terminal();
+    let preferred: Option<String> = None;
     let terminal = preferred.as_deref().unwrap_or("terminal");
 
     let shell = get_user_shell();
@@ -3070,7 +2974,7 @@ fn launch_linux_terminal(config_file: &std::path::Path, cwd: Option<&Path>) -> R
     use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
 
-    let preferred = crate::settings::get_preferred_terminal();
+    let preferred: Option<String> = None;
 
     let shell = get_user_shell();
     let exec_line = build_exec_line(&shell, cwd);
@@ -3188,7 +3092,7 @@ fn launch_windows_terminal(
     config_file: &std::path::Path,
     cwd: Option<&Path>,
 ) -> Result<(), String> {
-    let preferred = crate::settings::get_preferred_terminal();
+    let preferred: Option<String> = None;
     let terminal = preferred.as_deref().unwrap_or("cmd");
 
     let bat_file = temp_dir.join(format!("cc_switch_claude_{}.bat", std::process::id()));
@@ -3343,7 +3247,7 @@ read -r _
         std::fs::set_permissions(&script_file, std::fs::Permissions::from_mode(0o755))
             .map_err(|e| format!("设置脚本权限失败: {e}"))?;
 
-        let preferred = crate::settings::get_preferred_terminal();
+        let preferred: Option<String> = None;
         let terminal = preferred.as_deref().unwrap_or("terminal");
 
         let result = match terminal {
@@ -3378,7 +3282,7 @@ read -r _
         std::fs::set_permissions(&script_file, std::fs::Permissions::from_mode(0o755))
             .map_err(|e| format!("设置脚本权限失败: {e}"))?;
 
-        let preferred = crate::settings::get_preferred_terminal();
+        let preferred: Option<String> = None;
         let default_terminals = [
             ("gnome-terminal", vec!["--"]),
             ("konsole", vec!["-e"]),
@@ -3439,7 +3343,7 @@ read -r _
 
     #[cfg(target_os = "windows")]
     {
-        let preferred = crate::settings::get_preferred_terminal();
+        let preferred: Option<String> = None;
         let terminal = preferred.as_deref().unwrap_or("cmd");
 
         let bat_file = temp_dir.join(format!("cc_switch_{}_{}.bat", label, pid));

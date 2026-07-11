@@ -1,43 +1,8 @@
-mod app_config;
-mod app_store;
-mod auto_launch;
-mod claude_desktop_config;
-mod claude_mcp;
-mod claude_plugin;
-mod codex_config;
-mod codex_history_migration;
-mod codex_state_db;
 mod commands;
-mod config;
-mod database;
-mod error;
-mod gemini_config;
-mod gemini_mcp;
-pub mod hermes_config;
-mod init_status;
 #[cfg(target_os = "linux")]
 mod linux_fix;
-mod mcp;
-mod openclaw_config;
-mod opencode_config;
 mod panic_hook;
-mod prompt;
-mod prompt_files;
-mod provider;
-mod provider_defaults;
 mod proxy;
-mod services;
-mod session_manager;
-mod settings;
-mod store;
-mod usage_events;
-mod usage_script;
-
-pub use app_config::AppType;
-pub use commands::{
-    get_tool_versions, probe_tool_installations, run_tool_lifecycle_action, set_window_theme,
-};
-pub use database::Database;
 
 use tauri::Manager;
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
@@ -83,9 +48,6 @@ pub fn run() {
     }
 
     let builder = builder
-        .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init())
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(window_state_flags())
@@ -105,7 +67,7 @@ pub fn run() {
             use tauri_plugin_log::{RotationStrategy, Target, TargetKind, TimezoneStrategy};
             let log_dir = panic_hook::get_log_dir();
             std::fs::create_dir_all(&log_dir).map_err(|error| error.to_string())?;
-            let _ = std::fs::remove_file(log_dir.join("cc-switch.log"));
+            let _ = std::fs::remove_file(log_dir.join("agent-manager.log"));
             app.handle().plugin(
                 tauri_plugin_log::Builder::default()
                     .level(log::LevelFilter::Trace)
@@ -113,7 +75,7 @@ pub fn run() {
                         Target::new(TargetKind::Stdout),
                         Target::new(TargetKind::Folder {
                             path: log_dir,
-                            file_name: Some("cc-switch".into()),
+                            file_name: Some("agent-manager".into()),
                         }),
                     ])
                     .rotation_strategy(RotationStrategy::KeepSome(2))
@@ -121,7 +83,7 @@ pub fn run() {
                     .timezone_strategy(TimezoneStrategy::UseLocal)
                     .build(),
             )?;
-            panic_hook::init_app_config_dir(crate::config::get_app_config_dir());
+            panic_hook::init_app_config_dir(panic_hook::default_app_config_dir());
 
             #[cfg(target_os = "linux")]
             if let Some(window) = app.get_webview_window("main") {

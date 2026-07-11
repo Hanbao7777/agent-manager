@@ -7,7 +7,6 @@
   ],
   "permissions": [
     "core:default",
-    "opener:default",
     "core:window:allow-set-skip-taskbar",
     "core:window:allow-start-dragging",
     "core:window:allow-minimize",
@@ -15,7 +14,6 @@
     "core:window:allow-is-maximized",
     "core:window:allow-close",
     "core:window:allow-set-decorations",
-    "process:allow-restart",
-    "dialog:default"
+    "core:window:allow-set-theme"
   ]
 }
