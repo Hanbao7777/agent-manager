@@ -6,7 +6,7 @@ import {
   GeminiIcon,
   OpenClawIcon,
 } from "@/components/BrandIcons";
-import { ProviderIcon } from "@/components/ProviderIcon";
+import { Terminal } from "lucide-react";
 
 export interface AppConfig {
   label: string;
@@ -72,14 +72,7 @@ export const APP_ICON_MAP: Record<AppId, AppConfig> = {
   },
   opencode: {
     label: "OpenCode",
-    icon: (
-      <ProviderIcon
-        icon="opencode"
-        name="OpenCode"
-        size={14}
-        showFallback={false}
-      />
-    ),
+    icon: <Terminal size={14} />,
     activeClass:
       "bg-indigo-500/10 ring-1 ring-indigo-500/20 hover:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400",
     badgeClass:
@@ -95,14 +88,7 @@ export const APP_ICON_MAP: Record<AppId, AppConfig> = {
   },
   hermes: {
     label: "Hermes",
-    icon: (
-      <ProviderIcon
-        icon="hermes"
-        name="Hermes"
-        size={14}
-        showFallback={false}
-      />
-    ),
+    icon: <Terminal size={14} />,
     activeClass:
       "bg-violet-500/10 ring-1 ring-violet-500/20 hover:bg-violet-500/20 text-violet-600 dark:text-violet-400",
     badgeClass:
