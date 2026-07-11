@@ -679,6 +679,10 @@ export function AgentLifecyclePage() {
       transition={{ duration: 0.3 }}
       className="space-y-6"
     >
+      <div className="space-y-1 px-1">
+        <h2 className="text-xl font-semibold">{t("app.title")}</h2>
+        <p className="text-sm text-muted-foreground">{t("app.description")}</p>
+      </div>
       <div className="space-y-3">
         <div className="flex flex-col gap-2 px-1 sm:flex-row sm:items-center sm:justify-between">
           <h3 className="text-sm font-medium">{t("settings.localEnvCheck")}</h3>

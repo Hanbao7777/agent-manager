@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Agent Manager
+Comment=Agent Manager for Claude Code, Codex & Gemini CLI
+Exec=agent-manager
+Icon=com.agentmanager.desktop
+Terminal=false
+Categories=Utility;Development;
+StartupNotify=true

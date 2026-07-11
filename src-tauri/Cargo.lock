@@ -757,8 +757,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "cc-switch"
-version = "3.16.5"
+name = "agent-manager"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "arboard",

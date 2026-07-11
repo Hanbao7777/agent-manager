@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "CC Switch",
-  "version": "3.16.5",
-  "identifier": "com.ccswitch.desktop",
+  "productName": "Agent Manager",
+  "version": "0.1.0",
+  "identifier": "com.agentmanager.desktop",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:3000",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "",
+        "title": "Agent Manager",
         "titleBarStyle": "Overlay",
         "width": 1000,
         "height": 650,
@@ -56,7 +56,7 @@
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["ccswitch"]
+        "schemes": ["agentmanager"]
       }
     }
   }

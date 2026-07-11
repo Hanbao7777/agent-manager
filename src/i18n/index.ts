@@ -13,7 +13,7 @@ const DEFAULT_LANGUAGE: Language = "zh";
 const getInitialLanguage = (): Language => {
   if (typeof window !== "undefined") {
     try {
-      const stored = window.localStorage.getItem("language");
+      const stored = window.localStorage.getItem("agent-manager-language");
       if (
         stored === "zh" ||
         stored === "zh-TW" ||

@@ -1,7 +1,7 @@
 {
   "app": {
-    "title": "CC Switch",
-    "description": "All-in-One Assistant for Claude Code, Codex & Gemini CLI"
+    "title": "Agent Manager",
+    "description": "Agent Manager for Claude Code, Codex & Gemini CLI"
   },
   "common": {
     "add": "Add",
@@ -43,9 +43,9 @@
     "notSet": "Not Set"
   },
   "firstRunNotice": {
-    "title": "Welcome to CC Switch",
-    "bodyDefault": "CC Switch lets you switch between multiple Claude Code / Codex / Gemini CLI providers with a single click. If you already had these tools configured, CC Switch has saved your existing setup as a provider named “default” so none of your previous configuration is lost.",
-    "bodyOfficial": "An “Official” preset is also included in the list — click it any time you want to switch back to the official default. CC Switch automatically backs up your current config to “default” before switching, so you can move back and forth freely. That's how CC Switch works 😊",
+    "title": "Welcome to Agent Manager",
+    "bodyDefault": "Agent Manager helps you manage Claude Code, Codex, and Gemini CLI installations from one place.",
+    "bodyOfficial": "Agent Manager keeps the supported agent tools ready to use and makes their lifecycle actions easy to inspect.",
     "confirm": "Got it"
   },
   "apiKeyInput": {
