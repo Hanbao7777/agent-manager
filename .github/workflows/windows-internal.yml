@@ -29,6 +29,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           npm install --global --force corepack@0.31.0
+          $env:Path = "$(npm prefix --global);$env:Path"
           corepack enable
           if ((corepack --version) -ne '0.31.0') { throw "Unexpected Corepack version" }
           corepack prepare pnpm@10.12.3 --activate
