@@ -75,3 +75,77 @@ jobs:
       - name: Build Tauri MSI
         shell: pwsh
         run: pnpm tauri build --bundles msi
+
+      - name: Assemble internal artifacts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $artifactDir = Join-Path $env:GITHUB_WORKSPACE 'internal-artifacts'
+          Remove-Item $artifactDir -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+
+          $msis = @(Get-ChildItem 'src-tauri/target/release/bundle/msi/*.msi' -File)
+          if ($msis.Count -ne 1) { throw "Expected exactly one MSI, found $($msis.Count)" }
+          Move-Item $msis[0].FullName (Join-Path $artifactDir 'Agent-Manager-0.1.0-Windows.msi')
+
+          $portableExe = 'src-tauri/target/release/agent-manager.exe'
+          if (-not (Test-Path $portableExe -PathType Leaf)) { throw "Missing $portableExe" }
+          $portableStage = Join-Path $env:RUNNER_TEMP 'agent-manager-portable'
+          Remove-Item $portableStage -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $portableStage | Out-Null
+          Copy-Item $portableExe (Join-Path $portableStage 'agent-manager.exe')
+          Compress-Archive -Path (Join-Path $portableStage 'agent-manager.exe') -DestinationPath (Join-Path $artifactDir 'Agent-Manager-0.1.0-Windows-Portable.zip') -CompressionLevel Optimal
+
+          $payloadFiles = @(
+            'Agent-Manager-0.1.0-Windows.msi',
+            'Agent-Manager-0.1.0-Windows-Portable.zip'
+          )
+          $lines = foreach ($file in $payloadFiles) {
+            $hash = (Get-FileHash (Join-Path $artifactDir $file) -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $file"
+          }
+          $lines | Set-Content (Join-Path $artifactDir 'SHA256SUMS.txt') -Encoding ascii
+          Get-ChildItem $artifactDir | Format-Table Name,Length
+
+      - name: Verify internal artifacts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $artifactDir = Join-Path $env:GITHUB_WORKSPACE 'internal-artifacts'
+          $payloadFiles = @(
+            'Agent-Manager-0.1.0-Windows.msi',
+            'Agent-Manager-0.1.0-Windows-Portable.zip'
+          )
+          $expectedArtifacts = @($payloadFiles + @('SHA256SUMS.txt') | Sort-Object)
+          $actualArtifacts = @(Get-ChildItem $artifactDir -File | Select-Object -ExpandProperty Name | Sort-Object)
+          if ((Compare-Object $expectedArtifacts $actualArtifacts)) { throw "Artifact names do not match contract" }
+          foreach ($name in $expectedArtifacts) {
+            if ((Get-Item (Join-Path $artifactDir $name)).Length -le 0) { throw "Empty artifact: $name" }
+          }
+          $zipEntries = @(tar -tf (Join-Path $artifactDir 'Agent-Manager-0.1.0-Windows-Portable.zip'))
+          if ($zipEntries.Count -ne 1 -or $zipEntries[0] -ne 'agent-manager.exe') { throw "Portable ZIP must contain only agent-manager.exe at its root" }
+          $manifestLines = @(Get-Content (Join-Path $artifactDir 'SHA256SUMS.txt'))
+          if ($manifestLines.Count -ne 2) { throw "SHA256SUMS.txt must contain exactly two lines" }
+          $manifest = @{}
+          foreach ($line in $manifestLines) {
+            if ($line -cnotmatch '^(?<hash>[0-9a-f]{64})  (?<name>.+)$') { throw "Malformed SHA256SUMS.txt line: $line" }
+            $name = $Matches.name
+            if (-not ($payloadFiles | Where-Object { $_ -ceq $name })) { throw "Unexpected checksum filename: $name" }
+            if ($manifest.ContainsKey($name)) { throw "Duplicate checksum filename: $name" }
+            $manifest[$name] = $Matches.hash
+          }
+          foreach ($name in $payloadFiles) {
+            if (-not $manifest.ContainsKey($name)) { throw "Missing checksum filename: $name" }
+          }
+          foreach ($name in $payloadFiles) {
+            $freshHash = (Get-FileHash (Join-Path $artifactDir $name) -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($manifest[$name] -cne $freshHash) { throw "Checksum mismatch for $name" }
+          }
+
+      - name: Upload internal build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Agent-Manager-0.1.0-Windows-internal
+          path: internal-artifacts/
+          if-no-files-found: error
+          retention-days: 7
