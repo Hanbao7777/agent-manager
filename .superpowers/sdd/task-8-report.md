@@ -18,7 +18,7 @@
 
 ## Changes
 
-- Reduced `commands/mod.rs` to `misc` lifecycle exports plus private state wrappers required by still-compiled proxy internals.
+- Reduced `commands/mod.rs` to `misc` lifecycle exports; removed the unused OAuth/Copilot state wrappers and their synchronization imports.
 - Replaced `lib.rs` startup composition with the minimal retained runtime and four-command handler.
 - Disabled `reqwest` default native-TLS features so retained Rustls networking does not pull an unavailable OpenSSL installation.
 - Removed the stale Tauri updater capability permission left by inherited deletions.
@@ -27,15 +27,16 @@
 
 - `cargo fmt --manifest-path src-tauri/Cargo.toml --check`: passed after formatting.
 - `cargo check --manifest-path src-tauri/Cargo.toml`: passed, with existing unreachable-module dead-code warnings.
-- `cargo test --manifest-path src-tauri/Cargo.toml`: library compilation passes, but legacy integration tests still import removed provider/settings/deeplink APIs; those tests are outside the retained lifecycle surface and prevent the full test target from compiling.
+- `cargo test --manifest-path src-tauri/Cargo.toml`: passed, 1,794 tests passed and 2 ignored after removing the excluded integration-test suite.
 - `corepack pnpm test:unit`: passed, 15 tests.
 - `corepack pnpm typecheck`: passed.
 - `corepack pnpm build:renderer`: passed.
 - Source scan confirms `lib.rs` has exactly four registered commands and no database/state/worker/tray startup calls.
 - Frontend invoke inventory is now exactly the four registered commands; the unused clipboard helper was removed.
+- Deleted all 12 files under `src-tauri/tests/`; they covered only excluded provider, proxy, MCP, profile, skills, import/export, deep-link, and legacy configuration behavior.
+- Removed stale proxy forwarder state-wrapper imports and kept the excluded proxy module out of the retained module graph.
 
 ## Risks / Limitations
 
 - Deep-link support still compiles legacy import dependencies, so those modules remain present and generate dead-code warnings until Task 9 or a later dependency-pruning task.
 - The existing `misc.rs` file still contains unregistered legacy helpers; only its lifecycle commands are reachable through Tauri.
-- Full Rust integration tests retain legacy feature coverage and need removal or relocation with the corresponding excluded backend tests.

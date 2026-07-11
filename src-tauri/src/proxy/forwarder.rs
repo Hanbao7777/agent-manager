@@ -22,7 +22,6 @@ use super::{
     types::{CopilotOptimizerConfig, OptimizerConfig, ProxyStatus, RectifierConfig},
     ProxyError,
 };
-use crate::commands::{CodexOAuthState, CopilotAuthState};
 use crate::proxy::providers::codex_oauth_auth::CodexOAuthManager;
 use crate::proxy::providers::copilot_auth::CopilotAuthManager;
 use crate::{
@@ -1265,8 +1264,8 @@ impl RequestForwarder {
         // 从 CopilotAuthManager 获取缓存的 API endpoint（支持企业版等非默认 endpoint）
         if is_copilot && !is_full_url {
             if let Some(app_handle) = &self.app_handle {
-                let copilot_state = app_handle.state::<CopilotAuthState>();
-                let copilot_auth = copilot_state.0.read().await;
+                let copilot_state = app_handle.state::<tokio::sync::RwLock<CopilotAuthManager>>();
+                let copilot_auth = copilot_state.read().await;
 
                 // 从 provider.meta 获取关联的 GitHub 账号 ID
                 let account_id = provider
@@ -1531,9 +1530,10 @@ impl RequestForwarder {
             // GitHub Copilot 特殊处理：从 CopilotAuthManager 获取真实 token
             if auth.strategy == AuthStrategy::GitHubCopilot {
                 if let Some(app_handle) = &self.app_handle {
-                    let copilot_state = app_handle.state::<CopilotAuthState>();
+                    let copilot_state =
+                        app_handle.state::<tokio::sync::RwLock<CopilotAuthManager>>();
                     let copilot_auth: tokio::sync::RwLockReadGuard<'_, CopilotAuthManager> =
-                        copilot_state.0.read().await;
+                        copilot_state.read().await;
 
                     // 从 provider.meta 获取关联的 GitHub 账号 ID（多账号支持）
                     let account_id = provider
@@ -1582,9 +1582,9 @@ impl RequestForwarder {
             // Codex OAuth 特殊处理：从 CodexOAuthManager 获取真实 access_token
             if auth.strategy == AuthStrategy::CodexOAuth {
                 if let Some(app_handle) = &self.app_handle {
-                    let codex_state = app_handle.state::<CodexOAuthState>();
+                    let codex_state = app_handle.state::<tokio::sync::RwLock<CodexOAuthManager>>();
                     let codex_auth: tokio::sync::RwLockReadGuard<'_, CodexOAuthManager> =
-                        codex_state.0.read().await;
+                        codex_state.read().await;
 
                     // 从 provider.meta 获取关联的 ChatGPT 账号 ID
                     let account_id = provider
@@ -2297,8 +2297,8 @@ impl RequestForwarder {
         let Some(app_handle) = &self.app_handle else {
             return;
         };
-        let copilot_state = app_handle.state::<CopilotAuthState>();
-        let copilot_auth = copilot_state.0.read().await;
+        let copilot_state = app_handle.state::<tokio::sync::RwLock<CopilotAuthManager>>();
+        let copilot_auth = copilot_state.read().await;
         let account_id = provider
             .meta
             .as_ref()
@@ -2331,8 +2331,8 @@ impl RequestForwarder {
             return false;
         };
 
-        let copilot_state = app_handle.state::<CopilotAuthState>();
-        let copilot_auth = copilot_state.0.read().await;
+        let copilot_state = app_handle.state::<tokio::sync::RwLock<CopilotAuthManager>>();
+        let copilot_auth = copilot_state.read().await;
         let account_id = provider
             .meta
             .as_ref()
