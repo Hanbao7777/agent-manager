@@ -11,7 +11,7 @@ rust-version = "1.85.0"
 # Upstream baseline: CC Switch 3.16.5, https://github.com/farion1231/cc-switch
 
 [lib]
-name = "cc_switch_lib"
+name = "agent_manager_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 doctest = false
 
