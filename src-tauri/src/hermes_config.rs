@@ -528,7 +528,7 @@ fn models_dict_to_array(dict: serde_json::Map<String, serde_json::Value>) -> ser
 
 /// Rewrite historical camelCase keys to Hermes' snake_case schema.
 ///
-/// Older DeepLink import paths emitted `baseUrl` / `apiKey` / `apiMode` /
+/// Older import paths emitted `baseUrl` / `apiKey` / `apiMode` /
 /// `maxTokens` / `contextLength`, which do not belong to Hermes'
 /// `_VALID_CUSTOM_PROVIDER_FIELDS` set. Writing those raw to YAML silently
 /// poisons `custom_providers:` entries. This sanitiser runs defensively on
@@ -543,7 +543,7 @@ fn sanitize_hermes_provider_keys(config: &mut serde_json::Value) {
         ("maxTokens", "max_tokens"),
         ("contextLength", "context_length"),
     ];
-    // Legacy DeepLink emitted `api: "openai-completions"` which is neither a
+    // Legacy imports emitted `api: "openai-completions"` which is neither a
     // Hermes field nor mappable to `api_mode`. `_cc_source` / `provider_key`
     // are UI-only markers injected on read — they must never reach YAML.
     const LEGACY_FIELDS_TO_DROP: &[&str] = &["api", PROVIDER_SOURCE_FIELD, "provider_key"];
@@ -691,7 +691,7 @@ pub fn get_providers() -> Result<serde_json::Map<String, serde_json::Value>, App
             if let Some(name) = item.get("name").and_then(|n| n.as_str()) {
                 match yaml_to_json(item) {
                     Ok(mut json_val) => {
-                        // Heal legacy camelCase records (from older DeepLink
+                        // Heal legacy camelCase records (from older imports
                         // imports) before the UI sees them, so editing doesn't
                         // reveal stale `baseUrl` / `apiKey` fields.
                         sanitize_hermes_provider_keys(&mut json_val);
@@ -803,7 +803,7 @@ pub fn set_provider(
         .cloned()
         .unwrap_or_default();
 
-    // Rewrite any historical camelCase keys (e.g. from older DeepLink imports)
+    // Rewrite any historical camelCase keys (e.g. from older imports)
     // before touching models / YAML — avoids writing non-Hermes fields back.
     let mut normalized = provider_config;
     sanitize_hermes_provider_keys(&mut normalized);
@@ -1784,7 +1784,7 @@ providers:
     #[test]
     #[serial]
     fn get_providers_heals_legacy_camel_case_on_read() {
-        // A DB may still hold records from older DeepLink imports that wrote
+        // A DB may still hold records from older imports that wrote
         // camelCase fields into `settings_config`. The read path must surface
         // them in Hermes' native snake_case so UI editors aren't lying to users.
         with_test_home(|| {

@@ -70,7 +70,7 @@ impl GeminiAdapter {
 
     /// 解析 OAuth 凭证
     pub fn parse_oauth_credentials(&self, key: &str) -> Option<OAuthCredentials> {
-        // 防御性 trim:前端在 input 事件中会 trim,但 JSON 编辑器 / deeplink
+        // 防御性 trim:前端在 input 事件中会 trim,但 JSON 编辑器
         // 导入 / live 回填等路径会绕过。带前导换行的 oauth_creds.json 粘贴
         // 是常见场景,此处统一兜底。
         let key = key.trim();

@@ -10,7 +10,6 @@ mod codex_state_db;
 mod commands;
 mod config;
 mod database;
-mod deeplink;
 mod error;
 mod gemini_config;
 mod gemini_mcp;
@@ -40,11 +39,7 @@ pub use commands::{
 };
 pub use database::Database;
 
-use tauri::Emitter;
 use tauri::Manager;
-#[cfg(target_os = "macos")]
-use tauri::RunEvent;
-use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 #[cfg(target_os = "windows")]
@@ -59,75 +54,6 @@ fn set_windows_app_user_model_id(app: &tauri::AppHandle) {
     } else {
         log::debug!("Windows AppUserModelID 已设置为 {app_id}");
     }
-}
-
-fn redact_url_for_log(url_str: &str) -> String {
-    match url::Url::parse(url_str) {
-        Ok(url) => {
-            let mut output = format!("{}://", url.scheme());
-            if let Some(host) = url.host_str() {
-                output.push_str(host);
-            }
-            output.push_str(url.path());
-            let mut keys: Vec<String> = url.query_pairs().map(|(k, _)| k.to_string()).collect();
-            keys.sort();
-            keys.dedup();
-            if !keys.is_empty() {
-                output.push_str("?[keys:");
-                output.push_str(&keys.join(","));
-                output.push(']');
-            }
-            output
-        }
-        Err(_) => {
-            let base = url_str.split('#').next().unwrap_or(url_str);
-            match base.split_once('?') {
-                Some((prefix, _)) => format!("{prefix}?[redacted]"),
-                None => base.to_string(),
-            }
-        }
-    }
-}
-
-/// Parse a deep link and notify the frontend without exposing query values in logs.
-fn handle_deeplink_url(
-    app: &tauri::AppHandle,
-    url_str: &str,
-    focus_main_window: bool,
-    source: &str,
-) -> bool {
-    if !url_str.starts_with("ccswitch://") {
-        return false;
-    }
-
-    log::info!(
-        "Deep link URL detected from {source}: {}",
-        redact_url_for_log(url_str)
-    );
-    match crate::deeplink::parse_deeplink_url(url_str) {
-        Ok(request) => {
-            if let Err(error) = app.emit("deeplink-import", &request) {
-                log::error!("Failed to emit deeplink-import event: {error}");
-            }
-            if focus_main_window {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.unminimize();
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                    #[cfg(target_os = "linux")]
-                    linux_fix::nudge_main_window(window);
-                }
-            }
-        }
-        Err(error) => {
-            log::error!("Failed to parse deep link URL: {error}");
-            let _ = app.emit(
-                "deeplink-error",
-                serde_json::json!({"url": url_str, "error": error.to_string()}),
-            );
-        }
-    }
-    true
 }
 
 fn window_state_flags() -> StateFlags {
@@ -147,12 +73,7 @@ pub fn run() {
 
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     {
-        builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            for arg in args {
-                if handle_deeplink_url(app, &arg, false, "single_instance args") {
-                    break;
-                }
-            }
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();
                 let _ = window.show();
@@ -162,7 +83,6 @@ pub fn run() {
     }
 
     let builder = builder
-        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -203,21 +123,6 @@ pub fn run() {
             )?;
             panic_hook::init_app_config_dir(crate::config::get_app_config_dir());
 
-            #[cfg(any(target_os = "linux", all(debug_assertions, windows)))]
-            if let Err(error) = app.deep_link().register_all() {
-                log::error!("Failed to register deep link schemes: {error}");
-            }
-            app.deep_link().on_open_url({
-                let app_handle = app.handle().clone();
-                move |event| {
-                    for url in event.urls() {
-                        if handle_deeplink_url(&app_handle, url.as_str(), true, "on_open_url") {
-                            break;
-                        }
-                    }
-                }
-            });
-
             #[cfg(target_os = "linux")]
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.with_webview(|webview| {
@@ -248,14 +153,5 @@ pub fn run() {
     let app = builder
         .build(tauri::generate_context!())
         .expect("error while running tauri application");
-    app.run(|app_handle, event| {
-        #[cfg(target_os = "macos")]
-        if let RunEvent::Opened { urls } = event {
-            if let Some(url) = urls.first() {
-                handle_deeplink_url(app_handle, url.as_str(), true, "RunEvent::Opened");
-            }
-        }
-        #[cfg(not(target_os = "macos"))]
-        let _ = (app_handle, event);
-    });
+    app.run(|_, _| {});
 }
