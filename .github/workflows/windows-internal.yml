@@ -47,8 +47,10 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          rustc --version --verbose
-          if ((rustup show active-toolchain) -notmatch '^1\.95\.0-x86_64-pc-windows-msvc') { throw "Unexpected Rust MSVC toolchain" }
+          $rustcDetails = rustc --version --verbose | Out-String
+          $rustcDetails
+          if ($rustcDetails -notmatch '(?m)^release: 1\.95\.0\s*$') { throw "Unexpected Rust version" }
+          if ($rustcDetails -notmatch '(?m)^host: x86_64-pc-windows-msvc\s*$') { throw "Unexpected Rust MSVC host" }
 
       - name: Install dependencies
         shell: pwsh
