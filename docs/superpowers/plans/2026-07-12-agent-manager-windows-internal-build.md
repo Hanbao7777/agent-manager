@@ -218,7 +218,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22.12.0"
-          cache: pnpm
       - name: Enable pinned Corepack and pnpm
         shell: pwsh
         run: |
@@ -241,7 +240,7 @@ jobs:
           if ((rustup show active-toolchain) -notmatch '^1\.95\.0-x86_64-pc-windows-msvc') { throw "Unexpected Rust MSVC toolchain" }
 ```
 
-Use the repository's existing `.node-version` and `rust-toolchain.toml` as the source of truth; the workflow must fail if the printed versions are not Node `22.12.0`, pnpm `10.12.3`, and the requested Rust `1.95` MSVC toolchain. Pin action references to reviewed immutable release references when the implementation repository policy requires SHA pinning; do not replace tool versions with `latest` or `stable`.
+Use the repository's existing `.node-version` and `rust-toolchain.toml` as the source of truth; the workflow must fail if the checked versions are not Node `22.12.0`, pnpm `10.12.3`, and the requested Rust `1.95` MSVC toolchain. Do not configure `actions/setup-node` caching; this plan intentionally omits `cache: pnpm` so setup-node cannot query a missing pnpm executable. Use the exact action references shown and do not replace tool versions with `latest` or `stable`.
 
 - [ ] **Step 2: Add frozen dependency installation and the exact frontend/Rust gates.**
 
@@ -280,6 +279,15 @@ Expected: Tauri builds the renderer through `beforeBuildCommand`, uses version `
 - [ ] **Step 4: Validate the workflow file locally and commit only the workflow.**
 
 ```bash
+workflow=.github/workflows/windows-internal.yml
+test "$(grep -E -c 'contents:[[:space:]]*write' "$workflow")" -eq 0
+if grep -E -i -n 'signing|codesign|tauri_signing|gh release|action-gh-release|createUpdaterArtifacts[[:space:]]*:[[:space:]]*true|updater|deep.?link|deep_link_protocols' "$workflow"; then
+  echo "Forbidden signing, release, updater, or deep-link behavior found" >&2
+  exit 1
+fi
+expected_names=$'Agent-Manager-0.1.0-Windows.msi\nAgent-Manager-0.1.0-Windows-Portable.zip\nSHA256SUMS.txt'
+actual_names=$(grep -oE 'Agent-Manager-[0-9]+\.[0-9]+\.[0-9]+-Windows(-Portable)?\.(msi|zip)|SHA256SUMS\.txt' "$workflow" | sort -u)
+diff -u <(printf '%s\n' "$expected_names") <(printf '%s\n' "$actual_names")
 git diff --check
 git status --short
 git diff -- .github/workflows/windows-internal.yml
@@ -288,7 +296,7 @@ git diff --cached --name-status
 git commit -m "ci: add Windows internal build workflow"
 ```
 
-Expected: only `.github/workflows/windows-internal.yml` is staged and committed. If a YAML linter is available, run it; otherwise inspect the parsed trigger, PowerShell blocks, action inputs, and expression quoting manually. Do not stage inherited deletions or generated `dist/`/target output.
+Expected: the policy scan passes, all three exact artifact names are present in the workflow, only `.github/workflows/windows-internal.yml` is staged and committed, and the trigger, PowerShell blocks, action inputs, and expression quoting are syntactically coherent. Do not stage inherited deletions or generated `dist/`/target output.
 
 ### Task 5: Package Portable ZIP, SHA256SUMS, And Actions Artifact Only
 
@@ -348,15 +356,31 @@ Expected: the step fails if the MSI is missing/ambiguous, the EXE is missing, ei
           )
           $actual = @(Get-ChildItem $artifactDir -File | Select-Object -ExpandProperty Name)
           if ((Compare-Object $expected $actual)) { throw "Artifact names do not match contract" }
-          foreach ($name in $expected) {
-            if ((Get-Item (Join-Path $artifactDir $name)).Length -le 0) { throw "Empty artifact: $name" }
-          }
-          $zipEntries = @(tar -tf (Join-Path $artifactDir 'Agent-Manager-0.1.0-Windows-Portable.zip'))
-          if ($zipEntries.Count -ne 1 -or $zipEntries[0] -ne 'agent-manager.exe') { throw "Portable ZIP must contain only agent-manager.exe at its root" }
-          Get-FileHash (Join-Path $artifactDir 'Agent-Manager-0.1.0-Windows.msi'), (Join-Path $artifactDir 'Agent-Manager-0.1.0-Windows-Portable.zip') -Algorithm SHA256
+           foreach ($name in $expected) {
+             if ((Get-Item (Join-Path $artifactDir $name)).Length -le 0) { throw "Empty artifact: $name" }
+           }
+           $zipEntries = @(tar -tf (Join-Path $artifactDir 'Agent-Manager-0.1.0-Windows-Portable.zip'))
+           if ($zipEntries.Count -ne 1 -or $zipEntries[0] -ne 'agent-manager.exe') { throw "Portable ZIP must contain only agent-manager.exe at its root" }
+           $manifestLines = @(Get-Content (Join-Path $artifactDir 'SHA256SUMS.txt'))
+           if ($manifestLines.Count -ne 2) { throw "SHA256SUMS.txt must contain exactly two lines" }
+           $manifest = @{}
+           foreach ($line in $manifestLines) {
+             if ($line -cnotmatch '^(?<hash>[0-9a-f]{64})  (?<name>.+)$') { throw "Malformed SHA256SUMS.txt line: $line" }
+             $name = $Matches.name
+             if (-not ($expected | Where-Object { $_ -ceq $name })) { throw "Unexpected checksum filename: $name" }
+             if ($manifest.ContainsKey($name)) { throw "Duplicate checksum filename: $name" }
+             $manifest[$name] = $Matches.hash
+           }
+           foreach ($name in $expected) {
+             if (-not $manifest.ContainsKey($name)) { throw "Missing checksum filename: $name" }
+           }
+           foreach ($name in $expected[0..1]) {
+             $freshHash = (Get-FileHash (Join-Path $artifactDir $name) -Algorithm SHA256).Hash.ToLowerInvariant()
+             if ($manifest[$name] -cne $freshHash) { throw "Checksum mismatch for $name" }
+           }
 ```
 
-Expected: exact three-file output, all non-empty, portable ZIP contains only the root EXE, and displayed hashes match `SHA256SUMS.txt`.
+Expected: exact three-file output, all non-empty, portable ZIP contains only the root EXE, and verification fails for any extra/missing manifest line, malformed or uppercase hash, unexpected/duplicate filename, missing expected filename, or mismatch against fresh `Get-FileHash` results.
 
 - [ ] **Step 3: Upload only an Actions Artifact and commit the packaging change.**
 
@@ -398,20 +422,30 @@ gh repo view "$AUTHORIZED_OWNER/agent-manager" --json nameWithOwner,isPrivate,de
 
 Expected: worktree is clean, `origin` is the confirmed private repository, `upstream` is the official CCSwitch URL, repository privacy is `true`, and all implementation commits are present. If any check differs, stop and request renewed user authorization; never push to `upstream`.
 
-- [ ] **Step 2: Push only the authorized branch to the private origin and trigger manually if needed.**
+- [ ] **Step 2: Push only the authorized branch and wait for its push-triggered run.**
 
 ```bash
+HEAD_SHA=$(git rev-parse HEAD)
 git push --set-upstream origin main
-gh workflow run "Windows Internal Build" --repo "$AUTHORIZED_OWNER/agent-manager" --ref main
-gh run list --repo "$AUTHORIZED_OWNER/agent-manager" --workflow windows-internal.yml --limit 5
+RUN_ID=''
+for attempt in {1..12}; do
+  RUN_ID=$(gh run list --repo "$AUTHORIZED_OWNER/agent-manager" --workflow windows-internal.yml --commit "$HEAD_SHA" --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+  if [ -n "$RUN_ID" ]; then break; fi
+  sleep 5
+done
+if [ -z "$RUN_ID" ]; then
+  gh workflow run "Windows Internal Build" --repo "$AUTHORIZED_OWNER/agent-manager" --ref main
+  RUN_ID=$(gh run list --repo "$AUTHORIZED_OWNER/agent-manager" --workflow windows-internal.yml --branch main --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+fi
+if [ -z "$RUN_ID" ]; then echo "Unable to identify a Windows workflow run" >&2; exit 1; fi
+printf 'Windows workflow run: %s\n' "$RUN_ID"
 ```
 
-Expected: push destination is printed as the private `origin`, the workflow is queued/running, and no release is created. If the branch is not `main`, use the actual branch from `git branch --show-current` consistently for push and `--ref`.
+Expected: the push destination is the private `origin`, and the identified run has `headSha` equal to `$HEAD_SHA`. The push-triggered run is used by default; `gh workflow run` executes only after the lookup timeout finds no run, or later when explicitly retrying a failed build. No release is created. If the branch is not `main`, use the actual branch from `git branch --show-current` consistently for push, `--commit`, `--branch`, and `--ref`.
 
 - [ ] **Step 3: Inspect the run and retain failure evidence without weakening gates.**
 
 ```bash
-RUN_ID=$(gh run list --repo "$AUTHORIZED_OWNER/agent-manager" --workflow windows-internal.yml --limit 1 --json databaseId --jq '.[0].databaseId')
 gh run watch "$RUN_ID" --repo "$AUTHORIZED_OWNER/agent-manager" --exit-status
 gh run view "$RUN_ID" --repo "$AUTHORIZED_OWNER/agent-manager" --log-failed
 gh run view "$RUN_ID" --repo "$AUTHORIZED_OWNER/agent-manager" --json conclusion,status,headSha,workflowName,url
@@ -429,12 +463,25 @@ Expected on success: conclusion `success`, all quality gates pass, MSI/ZIP/check
 Record Windows edition/build, Sandbox or VM identifier, WebView2 Runtime presence, WSL availability, workflow Run ID, artifact download time, and SHA-256 values before installing anything. Download the Actions Artifact into a disposable directory, verify `SHA256SUMS.txt` with:
 
 ```powershell
-Get-FileHash .\Agent-Manager-0.1.0-Windows.msi -Algorithm SHA256
-Get-FileHash .\Agent-Manager-0.1.0-Windows-Portable.zip -Algorithm SHA256
-Get-Content .\SHA256SUMS.txt
+$expected = @('Agent-Manager-0.1.0-Windows.msi', 'Agent-Manager-0.1.0-Windows-Portable.zip')
+$lines = @(Get-Content .\SHA256SUMS.txt)
+if ($lines.Count -ne $expected.Count) { throw 'SHA256SUMS.txt must contain exactly two lines' }
+$manifest = @{}
+foreach ($line in $lines) {
+  if ($line -cnotmatch '^(?<hash>[0-9a-f]{64})  (?<name>.+)$') { throw "Malformed checksum line: $line" }
+  $name = $Matches.name
+  if (-not ($expected | Where-Object { $_ -ceq $name })) { throw "Unexpected checksum filename: $name" }
+  if ($manifest.ContainsKey($name)) { throw "Duplicate checksum filename: $name" }
+  $manifest[$name] = $Matches.hash
+}
+foreach ($name in $expected) {
+  if (-not $manifest.ContainsKey($name)) { throw "Missing checksum filename: $name" }
+  $freshHash = (Get-FileHash ".\$name" -Algorithm SHA256).Hash.ToLowerInvariant()
+  if ($manifest[$name] -cne $freshHash) { throw "Checksum mismatch for $name" }
+}
 ```
 
-Expected: both computed hashes match the manifest. Do not copy artifacts to the host, use a personal profile, or run the MSI/EXE outside the disposable environment.
+Expected: both lowercase hashes and both exact filenames match fresh file hashes; malformed, uppercase, duplicate, extra, or missing manifest entries fail. Do not copy artifacts to the host, use a personal profile, or run the MSI/EXE outside the disposable environment.
 
 - [ ] **Step 2: Verify MSI install, launch, and uninstall without host mutation.**
 
@@ -452,7 +499,7 @@ Expected: portable app launches in the disposable environment, or the report rec
 
 Use the UI's six configured tools (Claude Code, Codex, Gemini CLI, OpenCode, OpenClaw, and Hermes) and record a matrix with columns `tool`, `environment`, `state`, `probe result`, `action`, `result`, and `evidence`. For each tool, exercise `not installed`, `installed and runnable`, `installed_but_broken`, and `upgrade available`; verify the UI preserves the `get_tool_versions`/`probe_tool_installations` fields and error semantics. Run one-item install, one-item upgrade, batch install/upgrade, and a batch where one simulated/controlled command fails; confirm remaining items continue and the failed item retains an actionable error.
 
-Real installer commands are allowed only inside the disposable Sandbox/VM. If a tool is unavailable or network access is unsuitable, use the repository's unit tests, command-plan behavior, and simulated executables for the non-destructive path, and mark the real installation scenario `blocked` rather than fabricating a pass.
+Real installer commands are allowed only inside the disposable Sandbox/VM. When real tool or network execution cannot be performed, use the repository's unit tests, command-plan behavior, and simulated executables for the non-destructive path, and mark the real installation scenario `blocked` rather than fabricating a pass.
 
 Expected: all six tools are represented; lifecycle state detection, single/batch operations, and failure isolation match the existing implementation. No real user Agent environment is changed.
 
