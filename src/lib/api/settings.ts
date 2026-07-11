@@ -43,7 +43,6 @@ export const settingsApi = {
   ): Promise<ToolInstallationReport[]> {
     return await invoke("probe_tool_installations", { tools });
   },
-
 };
 
 /** 单处工具安装的诊断信息（多处安装冲突检测）。字段对应后端 ToolInstallation。 */
