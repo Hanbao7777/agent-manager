@@ -40,7 +40,7 @@ jobs:
       - name: Setup Rust MSVC
         uses: dtolnay/rust-toolchain@1.95.0
         with:
-          toolchain: 1.95.0-x86_64-pc-windows-msvc
+          target: x86_64-pc-windows-msvc
           components: rustfmt, clippy
 
       - name: Verify Rust MSVC toolchain
