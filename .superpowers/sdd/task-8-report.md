@@ -27,12 +27,15 @@
 
 - `cargo fmt --manifest-path src-tauri/Cargo.toml --check`: passed after formatting.
 - `cargo check --manifest-path src-tauri/Cargo.toml`: passed, with existing unreachable-module dead-code warnings.
-- `cargo test --manifest-path src-tauri/Cargo.toml`: started successfully and exceeded the 120-second execution timeout during compilation; no test failure was reported.
-- Frontend checks were not run because `pnpm` is unavailable in the environment.
+- `cargo test --manifest-path src-tauri/Cargo.toml`: library compilation passes, but legacy integration tests still import removed provider/settings/deeplink APIs; those tests are outside the retained lifecycle surface and prevent the full test target from compiling.
+- `corepack pnpm test:unit`: passed, 15 tests.
+- `corepack pnpm typecheck`: passed.
+- `corepack pnpm build:renderer`: passed.
 - Source scan confirms `lib.rs` has exactly four registered commands and no database/state/worker/tray startup calls.
+- Frontend invoke inventory is now exactly the four registered commands; the unused clipboard helper was removed.
 
 ## Risks / Limitations
 
 - Deep-link support still compiles legacy import dependencies, so those modules remain present and generate dead-code warnings until Task 9 or a later dependency-pruning task.
 - The existing `misc.rs` file still contains unregistered legacy helpers; only its lifecycle commands are reachable through Tauri.
-- Frontend validation remains pending on an environment with `pnpm`.
+- Full Rust integration tests retain legacy feature coverage and need removal or relocation with the corresponding excluded backend tests.

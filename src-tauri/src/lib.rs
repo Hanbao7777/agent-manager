@@ -38,6 +38,7 @@ pub use app_config::AppType;
 pub use commands::{
     get_tool_versions, probe_tool_installations, run_tool_lifecycle_action, set_window_theme,
 };
+pub use database::Database;
 
 use tauri::Emitter;
 use tauri::Manager;
