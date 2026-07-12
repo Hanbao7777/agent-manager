@@ -90,3 +90,53 @@ jobs:
           actual="$(lipo -archs "$executable" | tr ' ' '\n' | sort | tr '\n' ' ' | sed 's/ $//')"
           test "$actual" = 'arm64 x86_64'
           file "$executable"
+
+      - name: Assemble internal artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_dir="$GITHUB_WORKSPACE/internal-artifacts"
+          rm -rf "$artifact_dir"
+          mkdir -p "$artifact_dir"
+          bundle_dir='src-tauri/target/universal-apple-darwin/release/bundle/dmg'
+          shopt -s nullglob
+          dmgs=("$bundle_dir"/*.dmg)
+          test "${#dmgs[@]}" -eq 1
+          name='Agent-Manager-0.1.0-macOS-Universal.dmg'
+          cp "${dmgs[0]}" "$artifact_dir/$name"
+          test -s "$artifact_dir/$name"
+          hash="$(shasum -a 256 "$artifact_dir/$name" | awk '{print tolower($1)}')"
+          printf '%s  %s\n' "$hash" "$name" > "$artifact_dir/SHA256SUMS.txt"
+
+      - name: Verify internal artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="$GITHUB_WORKSPACE/internal-artifacts"
+          name='Agent-Manager-0.1.0-macOS-Universal.dmg'
+          shopt -s nullglob
+          entries=("$dir"/*)
+          names=()
+          for path in "${entries[@]}"; do
+            test -f "$path"
+            names+=("${path##*/}")
+          done
+          actual="$(printf '%s\n' "${names[@]}" | sort | tr '\n' ' ' | sed 's/ $//')"
+          test "$actual" = "$name SHA256SUMS.txt"
+          test -s "$dir/$name"
+          test -s "$dir/SHA256SUMS.txt"
+          lines="$(wc -l < "$dir/SHA256SUMS.txt" | tr -d '[:space:]')"
+          test "$lines" = 1
+          line="$(cat "$dir/SHA256SUMS.txt")"
+          [[ "$line" =~ ^([0-9a-f]{64})\ \ (Agent-Manager-0\.1\.0-macOS-Universal\.dmg)$ ]]
+          test "${BASH_REMATCH[2]}" = "$name"
+          fresh="$(shasum -a 256 "$dir/$name" | awk '{print tolower($1)}')"
+          test "${BASH_REMATCH[1]}" = "$fresh"
+
+      - name: Upload internal build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Agent-Manager-0.1.0-macOS-Universal-internal
+          path: internal-artifacts/
+          if-no-files-found: error
+          retention-days: 7
