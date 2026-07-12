@@ -86,8 +86,6 @@ jobs:
           shopt -s nullglob
           apps=("$bundle_dir"/*.app)
           test "${#apps[@]}" -eq 1
-          app_executable="${apps[0]}/Contents/MacOS/agent-manager"
-          test -e "$app_executable"
           executable='src-tauri/target/universal-apple-darwin/release/agent-manager'
           test -s "$executable"
           xcrun --find lipo
