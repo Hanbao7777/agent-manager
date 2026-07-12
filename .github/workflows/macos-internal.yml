@@ -88,16 +88,46 @@ jobs:
           test "${#apps[@]}" -eq 1
           executable='src-tauri/target/universal-apple-darwin/release/agent-manager'
           test -s "$executable"
-          developer_dir="$(xcode-select -p)"
-          lipo_path="$developer_dir/Toolchains/XcodeDefault.xctoolchain/usr/bin/lipo"
-          test -x "$lipo_path"
           file "$executable"
-          archs="$("$lipo_path" -archs "$executable")"
-          printf 'Raw architectures: %s\n' "$archs"
-          actual="$(printf '%s\n' "$archs" | awk '{for (i = 1; i <= NF; i++) print $i}' | sort | awk '{if (NR > 1) printf " "; printf "%s", $0} END {print ""}')"
-          printf 'Detected architectures: %s\n' "$actual"
-          test "$actual" = 'arm64 x86_64'
-          file "$executable"
+          python3 - "$executable" <<'PY'
+          import struct
+          import sys
+          from pathlib import Path
+
+          executable = Path(sys.argv[1])
+          data = executable.read_bytes()
+          if len(data) < 8:
+              raise SystemExit("Mach-O executable is too small")
+
+          magic, count = struct.unpack_from(">II", data)
+          formats = {
+              0xCAFEBABE: (">iiIII", 20),
+              0xCAFEBABF: (">iiQQII", 32),
+          }
+          if magic not in formats:
+              raise SystemExit(f"Expected a big-endian Mach-O FAT header, got 0x{magic:08x}")
+          if count != 2:
+              raise SystemExit(f"Expected exactly two Mach-O slices, got {count}")
+
+          entry_format, entry_size = formats[magic]
+          offset = 8
+          cpu_types = []
+          for index in range(count):
+              if offset + entry_size > len(data):
+                  raise SystemExit(f"Truncated Mach-O FAT entry {index}")
+              entry = struct.unpack_from(entry_format, data, offset)
+              cpu_type, _, slice_offset, slice_size = entry[:4]
+              if slice_size <= 0 or slice_offset + slice_size > len(data):
+                  raise SystemExit(f"Invalid Mach-O slice bounds for entry {index}")
+              cpu_types.append(cpu_type & 0xFFFFFFFF)
+              offset += entry_size
+
+          expected = [0x01000007, 0x0100000C]  # x86_64, arm64
+          if sorted(cpu_types) != expected:
+              observed = ", ".join(f"0x{value:08x}" for value in sorted(cpu_types))
+              raise SystemExit(f"Unexpected Mach-O CPU types: {observed}")
+          print("Verified Universal Mach-O architectures: arm64 x86_64")
+          PY
 
       - name: Assemble internal artifact
         shell: bash
