@@ -46,6 +46,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(rustc --version | awk '{print $2}')" = "1.95.0"
+          rustup target add x86_64-apple-darwin
           rustup target list --installed | sort > /tmp/targets.txt
           grep -Fx aarch64-apple-darwin /tmp/targets.txt
           grep -Fx x86_64-apple-darwin /tmp/targets.txt
