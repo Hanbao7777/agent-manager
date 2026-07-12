@@ -1,0 +1,92 @@
+name: macOS Universal Internal Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-universal-internal-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.12.0"
+
+      - name: Enable pinned Corepack and pnpm
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global --force corepack@0.31.0
+          corepack enable
+          test "$(corepack --version)" = "0.31.0"
+          corepack prepare pnpm@10.12.3 --activate
+          test "$(node --version)" = "v22.12.0"
+          test "$(pnpm --version)" = "10.12.3"
+
+      - name: Setup Rust Apple targets
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          components: rustfmt,clippy
+
+      - name: Verify Rust toolchain and targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(rustc --version | awk '{print $2}')" = "1.95.0"
+          rustup target list --installed | sort > /tmp/targets.txt
+          grep -Fx aarch64-apple-darwin /tmp/targets.txt
+          grep -Fx x86_64-apple-darwin /tmp/targets.txt
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Frontend format check
+        run: pnpm format:check
+
+      - name: TypeScript type check
+        run: pnpm typecheck
+
+      - name: Frontend unit tests
+        run: pnpm test:unit
+
+      - name: Renderer build
+        run: pnpm build:renderer
+
+      - name: Rust format check
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Rust check
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Build Tauri Universal DMG
+        run: pnpm tauri build --target universal-apple-darwin --bundles dmg
+
+      - name: Verify Universal app architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle_dir='src-tauri/target/universal-apple-darwin/release/bundle/macos'
+          shopt -s nullglob
+          apps=("$bundle_dir"/*.app)
+          test "${#apps[@]}" -eq 1
+          executable="${apps[0]}/Contents/MacOS/agent-manager"
+          test -s "$executable"
+          actual="$(lipo -archs "$executable" | tr ' ' '\n' | sort | tr '\n' ' ' | sed 's/ $//')"
+          test "$actual" = 'arm64 x86_64'
+          file "$executable"
