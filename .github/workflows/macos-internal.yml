@@ -90,9 +90,9 @@ jobs:
           test -e "$app_executable"
           executable='src-tauri/target/universal-apple-darwin/release/agent-manager'
           test -s "$executable"
-          command -v lipo
+          xcrun --find lipo
           file "$executable"
-          archs="$(lipo -archs "$executable")"
+          archs="$(xcrun lipo -archs "$executable")"
           printf 'Raw architectures: %s\n' "$archs"
           actual="$(printf '%s\n' "$archs" | awk '{for (i = 1; i <= NF; i++) print $i}' | sort | awk '{if (NR > 1) printf " "; printf "%s", $0} END {print ""}')"
           printf 'Detected architectures: %s\n' "$actual"
