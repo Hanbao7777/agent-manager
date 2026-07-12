@@ -89,7 +89,8 @@ jobs:
           executable="${apps[0]}/Contents/MacOS/agent-manager"
           test -s "$executable"
           archs="$(lipo -archs "$executable")"
-          actual="$(printf '%s\n' "$archs" | awk '{for (i = 1; i <= NF; i++) print $i}' | sort | paste -sd ' ' -)"
+          printf 'Raw architectures: %s\n' "$archs"
+          actual="$(printf '%s\n' "$archs" | awk '{for (i = 1; i <= NF; i++) print $i}' | sort | awk '{if (NR > 1) printf " "; printf "%s", $0} END {print ""}')"
           printf 'Detected architectures: %s\n' "$actual"
           test "$actual" = 'arm64 x86_64'
           file "$executable"
