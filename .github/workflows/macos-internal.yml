@@ -88,7 +88,8 @@ jobs:
           test "${#apps[@]}" -eq 1
           executable='src-tauri/target/universal-apple-darwin/release/agent-manager'
           test -s "$executable"
-          lipo_path="$(xcrun --sdk macosx --find lipo)"
+          developer_dir="$(xcode-select -p)"
+          lipo_path="$developer_dir/Toolchains/XcodeDefault.xctoolchain/usr/bin/lipo"
           test -x "$lipo_path"
           file "$executable"
           archs="$("$lipo_path" -archs "$executable")"
