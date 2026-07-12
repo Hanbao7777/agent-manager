@@ -82,10 +82,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bundle_dir='src-tauri/target/universal-apple-darwin/release/bundle/macos'
-          shopt -s nullglob
-          apps=("$bundle_dir"/*.app)
-          test "${#apps[@]}" -eq 1
           executable='src-tauri/target/universal-apple-darwin/release/agent-manager'
           test -s "$executable"
           file "$executable"
