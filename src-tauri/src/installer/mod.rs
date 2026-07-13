@@ -58,47 +58,49 @@ pub fn start_tool_install(
         .task_id
         .clone()
         .ok_or_else(|| "missing task id".to_string())?;
-    let plan = store
-        .get(&task_id)
-        .ok_or_else(|| "unknown install task".to_string())?
-        .plan;
-    let task_id = store
-        .start(request, &CommandRuntime)
-        .map_err(|error| error.detail.unwrap_or_else(|| error.message_key))?;
-    if let Some(task) = store.get(&task_id) {
-        // `start` executes synchronously. Emit only transitions that the task
-        // actually reached, rather than claiming tool work after repair failed.
-        if !plan.actions.is_empty() {
-            emit_stage(&app, &task_id, InstallStage::Repairing);
+    if store.get(&task_id).is_none() {
+        return Err("unknown install task".into());
+    }
+    let task_store = store.inner().clone();
+    let emitted_task_id = task_id.clone();
+    std::thread::spawn(move || {
+        let completed_id = task_store
+            .start(request, &CommandRuntime)
+            .unwrap_or(emitted_task_id);
+        if let Some(task) = task_store.get(&completed_id) {
+            emit_reached_events(&app, &task);
         }
-        if let Some(result) = task.result.as_ref() {
-            if !result.tools.is_empty() {
-                emit_stage(&app, &task_id, InstallStage::InstallingTools);
-                emit_stage(&app, &task_id, InstallStage::Verifying);
-                for tool_result in &result.tools {
-                    let _ = app.emit(
-                        "agent-manager://install-task",
-                        InstallTaskEvent::ToolFinished {
-                            task_id: task_id.clone(),
-                            result: tool_result.clone(),
-                        },
-                    );
-                }
+    });
+    Ok(task_id)
+}
+
+fn emit_reached_events(app: &tauri::AppHandle, task: &InstallTaskSnapshot) {
+    if !task.plan.actions.is_empty() {
+        emit_stage(app, &task.task_id, InstallStage::Repairing);
+    }
+    if let Some(result) = task.result.as_ref() {
+        if !result.tools.is_empty() {
+            emit_stage(app, &task.task_id, InstallStage::InstallingTools);
+            emit_stage(app, &task.task_id, InstallStage::Verifying);
+            for tool_result in &result.tools {
+                let _ = app.emit(
+                    "agent-manager://install-task",
+                    InstallTaskEvent::ToolFinished {
+                        task_id: task.task_id.clone(),
+                        result: tool_result.clone(),
+                    },
+                );
             }
         }
+        emit_stage(app, &task.task_id, InstallStage::Completed);
         let _ = app.emit(
             "agent-manager://install-task",
             InstallTaskEvent::Finished {
-                task_id: task_id.clone(),
-                result: task.result.unwrap_or(InstallTaskResult {
-                    status: InstallTaskStatus::Failed,
-                    tools: Vec::new(),
-                    failure: None,
-                }),
+                task_id: task.task_id.clone(),
+                result: result.clone(),
             },
         );
     }
-    Ok(task_id)
 }
 
 fn emit_stage(app: &tauri::AppHandle, task_id: &str, stage: InstallStage) {

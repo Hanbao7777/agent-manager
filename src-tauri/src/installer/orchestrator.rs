@@ -427,13 +427,11 @@ impl OrchestratorRuntime for CommandRuntime {
                 std::env::temp_dir().join(format!("agent-manager-node-{}", std::process::id()));
             super::install_node_release(adapter.as_ref(), &release, temp).await
         };
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            tokio::task::block_in_place(|| handle.block_on(install))
-        } else {
-            tokio::runtime::Runtime::new()
-                .map_err(|error| failure(InstallFailureCode::InstallerFailure, &error.to_string()))?
-                .block_on(install)
-        }
+        // CommandRuntime is run by the dedicated install worker. Its runtime
+        // boundary must not be nested in Tauri's Tokio executor.
+        tokio::runtime::Runtime::new()
+            .map_err(|error| failure(InstallFailureCode::InstallerFailure, &error.to_string()))?
+            .block_on(install)
     }
 
     fn install_tool(&self, tool: ToolId) -> ToolInstallResult {

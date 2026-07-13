@@ -13,8 +13,8 @@ Tasks:
 - Task 2: complete (commit `ca2a47b5`, passed spec and quality review)
 - Task 3: complete (commit `970faaf1`, passed spec and quality review)
 - Task 4: complete recovery (`task_d8843c61c323`; commits `19a67d49`, `3bbce1bb`, and `7991c6f5`; review ledger follows in this commit)
-- Task 5: complete recovery (base `0248844c`, ledger `c65f4586`, secure-adapter corrections `1569ef50`); prior dispatch `task_e8174f0aafbb` ended in three premature worker terminations, then this revalidation added adapter-boundary coverage for LTS assets, integrity ordering, cleanup, signature/authorization failures, and PATH parsing. The Task 4 verifier tests are reused only for selected-pair-only PATH propagation and representative/missing/ambiguous Node/npm pairs.
-- Task 6: pending
+- Task 5: complete recovery (base `0248844c`, ledger `c65f4586`, secure-adapter corrections `1569ef50`); prior dispatch `task_e8174f0aafbb` ended in three premature worker terminations, then this revalidation added adapter-boundary coverage for LTS assets, integrity ordering, cleanup, signature/authorization failures, and PATH parsing.
+- Task 6: implemented and under final review (commits `4418442d`, `7525081c`, `bdce98d1`, and the current async correction); task persistence marks interrupted work for a new preflight and never resumes privileged work, while native installs now run in a background worker.
 - Task 7: pending
 - Task 8: pending
 - Task 9: pending
@@ -25,13 +25,11 @@ Verification notes:
 - Task 2 focused Rust tests are blocked locally before project compilation because MSVC `link.exe` is unavailable; Windows/macOS workflow evidence is required.
 - Task 3: formatter, diff, and scope checks passed. Focused probe, repair, and legacy misc test attempts are blocked before project compilation by the same missing MSVC linker.
 - Task 4: `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`, `git diff --check`, and `git show --check` passed. Focused verifier tests remain blocked before project compilation because MSVC `link.exe` is unavailable.
-- Task 4: `opencode-ai` remains the repository's established OpenCode fallback package contract from `commands/misc.rs`. No CI rerun was attempted because the recorded Windows/macOS workflow failures are account billing or spending-limit failures before job execution.
-- Task 5 recovery: `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`, `git diff --check`, and `git show --check 1569ef50` passed. Platform tests and `cargo check` are blocked before project compilation because local MSVC `link.exe` is unavailable; GitHub Actions was not retried because the recorded billing/spending limit prevents job steps.
-- Task 2 platform runs `29262339132` (Windows) and `29262341594` (macOS) failed before any job step because GitHub reported failed account payments or an insufficient spending limit. No platform compile/test evidence was produced; do not rerun until billing is restored.
+- Task 5 recovery: `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`, `git diff --check`, and `git show --check 1569ef50` passed. Platform tests and `cargo check` are blocked before project compilation because local MSVC `link.exe` is unavailable.
+- Task 6: `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` and `git diff --check` pass. Focused Rust tests remain blocked before project compilation because `link.exe` is unavailable.
 
 Coordination notes:
 - Task 2 completion required manual Orca lifecycle recovery because valid `worker_done` messages came from the original pane under a stale sender handle while the dispatch remained `dispatched`.
 - Task 3 completion also requires manual Orca lifecycle recovery for the same stale sender-handle behavior.
 - The Task 2 worker accidentally created changes in the forbidden parent checkout before correction. Those parent-checkout changes were not modified or cleaned by the coordinator and remain outside this authoritative worktree.
 - The initial Task 3 worker attempt also landed in the forbidden parent checkout. The corrected Task 3 implementation was recreated in the authoritative worktree; parent-checkout contamination remains untouched.
-- Task 4 required manual lifecycle recovery: valid `msg_5319471104a1` originated from the original worker pane under a stale sender handle while Orca left the dispatch active.
