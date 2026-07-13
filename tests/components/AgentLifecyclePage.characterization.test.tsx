@@ -29,7 +29,15 @@ const {
   listenAllInstall: vi.fn(),
   listenExitBlocked: vi.fn(),
 }));
-const toastError = vi.hoisted(() => vi.fn());
+const { toastSuccess, toastError, toastWarning } = vi.hoisted(() => ({
+  toastSuccess: vi.fn(),
+  toastError: vi.fn(),
+  toastWarning: vi.fn(),
+}));
+const translate = vi.hoisted(
+  () => (key: string, values?: Record<string, unknown>) =>
+    values ? `${key}:${JSON.stringify(values)}` : key,
+);
 
 vi.mock("@/lib/api", () => ({
   settingsApi: {
@@ -52,16 +60,15 @@ vi.mock("@/lib/api", () => ({
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
-    t: (key: string, values?: Record<string, unknown>) =>
-      values ? `${key}:${JSON.stringify(values)}` : key,
+    t: translate,
   }),
 }));
 
 vi.mock("sonner", () => ({
   toast: {
-    success: vi.fn(),
+    success: toastSuccess,
     error: toastError,
-    warning: vi.fn(),
+    warning: toastWarning,
     info: vi.fn(),
   },
 }));
@@ -164,6 +171,176 @@ describe("AgentLifecyclePage characterization", () => {
     expect(listenExitBlocked).not.toHaveBeenCalled();
     expect(getActiveInstall).not.toHaveBeenCalled();
     expect(replayInstall).not.toHaveBeenCalled();
+  });
+
+  it("does not replay recovery when getActiveTask resolves after unmount", async () => {
+    let resolveActive!: (task: unknown) => void;
+    const activeTask = new Promise<unknown>((resolve) => {
+      resolveActive = resolve;
+    });
+    const unlistenInstall = vi.fn();
+    const unlistenExit = vi.fn();
+    getActiveInstall.mockReturnValue(activeTask);
+    listenAllInstall.mockResolvedValue(unlistenInstall);
+    listenExitBlocked.mockResolvedValue(unlistenExit);
+
+    const view = render(<AgentLifecyclePage />);
+    await waitFor(() => expect(getActiveInstall).toHaveBeenCalledOnce());
+    view.unmount();
+    resolveActive({
+      task_id: "install-1",
+      request: { task_id: "install-1", tools: ["claude"], action: "install" },
+      stage: "installing_tools",
+      plan: { actions: [] },
+      result: null,
+      cancellation_requested: false,
+      interrupted: false,
+    });
+    await activeTask;
+
+    expect(unlistenInstall).toHaveBeenCalledOnce();
+    expect(unlistenExit).toHaveBeenCalledOnce();
+    expect(replayInstall).not.toHaveBeenCalled();
+    expect(toastSuccess).not.toHaveBeenCalled();
+    expect(toastWarning).not.toHaveBeenCalled();
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("does not apply a task event that resolves after unmount", async () => {
+    let resolveTask!: (task: unknown) => void;
+    const taskSnapshot = new Promise<unknown>((resolve) => {
+      resolveTask = resolve;
+    });
+    const unlisten = vi.fn();
+    getInstallTask.mockReturnValue(taskSnapshot);
+    listenAllInstall.mockResolvedValue(unlisten);
+    const view = render(<AgentLifecyclePage />);
+    await waitFor(() => expect(replayInstall).toHaveBeenCalledOnce());
+    const listener = listenAllInstall.mock.calls[0][0] as (
+      event: unknown,
+    ) => Promise<void>;
+    const applyEvent = listener({
+      type: "finished",
+      task_id: "install-1",
+      result: { status: "needs_user_action", tools: [] },
+    });
+    await waitFor(() =>
+      expect(getInstallTask).toHaveBeenCalledWith("install-1"),
+    );
+    view.unmount();
+    resolveTask({
+      task_id: "install-1",
+      request: { task_id: "install-1", tools: ["claude"], action: "install" },
+      stage: "completed",
+      plan: { actions: [] },
+      result: { status: "needs_user_action", tools: [] },
+      cancellation_requested: false,
+      interrupted: false,
+    });
+    await applyEvent;
+
+    expect(unlisten).toHaveBeenCalledOnce();
+    expect(toastSuccess).not.toHaveBeenCalled();
+    expect(toastWarning).not.toHaveBeenCalled();
+    expect(toastError).not.toHaveBeenCalled();
+    expect(probeToolInstallations).not.toHaveBeenCalled();
+  });
+
+  it("does not continue an installer result after refresh resolves post-unmount", async () => {
+    let resolveRefresh!: (versions: typeof toolVersions) => void;
+    const refresh = new Promise<typeof toolVersions>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    const unlisten = vi.fn();
+    const completedTask = {
+      task_id: "install-1",
+      request: { task_id: "install-1", tools: ["claude"], action: "install" },
+      stage: "completed",
+      plan: { actions: [] },
+      result: {
+        status: "needs_user_action",
+        tools: [{ tool: "claude", status: "installed_not_runnable" }],
+      },
+      cancellation_requested: false,
+      interrupted: false,
+    };
+    getInstallTask.mockResolvedValue(completedTask);
+    listenAllInstall.mockResolvedValue(unlisten);
+    const view = render(<AgentLifecyclePage />);
+    await waitFor(() => expect(replayInstall).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(screen.getAllByText("common.notInstalled")).toHaveLength(6),
+    );
+    getToolVersions.mockClear();
+    getToolVersions.mockReturnValueOnce(refresh);
+    const listener = listenAllInstall.mock.calls[0][0] as (
+      event: unknown,
+    ) => Promise<void>;
+    const applyEvent = listener({
+      type: "finished",
+      task_id: "install-1",
+      result: completedTask.result,
+    });
+    await waitFor(() => expect(getToolVersions).toHaveBeenCalledOnce());
+    view.unmount();
+    resolveRefresh(toolVersions);
+    await applyEvent;
+
+    expect(unlisten).toHaveBeenCalledOnce();
+    expect(toastSuccess).not.toHaveBeenCalled();
+    expect(toastWarning).not.toHaveBeenCalled();
+    expect(toastError).not.toHaveBeenCalled();
+    expect(probeToolInstallations).not.toHaveBeenCalled();
+  });
+
+  it("does not write silent diagnosis results after unmount", async () => {
+    let resolveDiagnosis!: (reports: unknown[]) => void;
+    const diagnosis = new Promise<unknown[]>((resolve) => {
+      resolveDiagnosis = resolve;
+    });
+    const completedTask = {
+      task_id: "install-1",
+      request: { task_id: "install-1", tools: ["claude"], action: "install" },
+      stage: "completed",
+      plan: { actions: [] },
+      result: {
+        status: "succeeded_with_conflicts",
+        tools: [{ tool: "claude", status: "installed_not_runnable" }],
+      },
+      cancellation_requested: false,
+      interrupted: false,
+    };
+    getInstallTask.mockResolvedValue(completedTask);
+    probeToolInstallations.mockReturnValue(diagnosis);
+    const view = render(<AgentLifecyclePage />);
+    await waitFor(() => expect(replayInstall).toHaveBeenCalledOnce());
+    const listener = listenAllInstall.mock.calls[0][0] as (
+      event: unknown,
+    ) => Promise<void>;
+    await listener({
+      type: "finished",
+      task_id: "install-1",
+      result: completedTask.result,
+    });
+    await waitFor(() =>
+      expect(probeToolInstallations).toHaveBeenCalledWith(["claude"]),
+    );
+    toastSuccess.mockClear();
+    toastWarning.mockClear();
+    toastError.mockClear();
+    view.unmount();
+    resolveDiagnosis([
+      {
+        tool: "claude",
+        installs: [{ path: "/tmp/claude", version: "1.0.0", runnable: true }],
+        is_conflict: true,
+      },
+    ]);
+    await diagnosis;
+
+    expect(toastSuccess).not.toHaveBeenCalled();
+    expect(toastWarning).not.toHaveBeenCalled();
+    expect(toastError).not.toHaveBeenCalled();
   });
 
   it("routes native installs through the installer API and preserves diagnosis after closing the flow", async () => {
