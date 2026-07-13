@@ -46,6 +46,8 @@
       "close": "關閉",
       "installed": "已安裝",
       "failed": "失敗",
+      "retry": "重試",
+      "diagnostics": "診斷資訊",
       "action": {
         "install_node": "安裝 Node.js",
         "upgrade_node": "升級 Node.js",

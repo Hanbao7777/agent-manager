@@ -12,6 +12,7 @@ vi.mock("react-i18next", () => ({
         "settings.installer.installed": "Installed",
         "settings.installer.failed": "Failed",
         "settings.installer.action.install_node": "Install Node.js",
+        "settings.installer.retry": "Retry",
       })[key] ?? key,
   }),
 }));
@@ -194,5 +195,45 @@ describe("ToolInstallDialog", () => {
     expect(
       screen.getByText("interrupted before installing tools"),
     ).toBeInTheDocument();
+  });
+
+  it("shows a retryable task failure code and retry action", () => {
+    const onRetry = vi.fn();
+    render(
+      <ToolInstallDialog
+        open
+        preparation={null}
+        task={{
+          task_id: "install-1",
+          request: { task_id: "install-1", tools: [], action: "install" },
+          stage: "completed",
+          plan: { actions: [] },
+          cancellation_requested: false,
+          interrupted: false,
+          result: {
+            status: "failed",
+            tools: [],
+            failure: {
+              code: "network_timeout",
+              stage: "repairing",
+              exit_code: null,
+              retryable: true,
+              requires_user_action: false,
+              message_key: "installer.failure",
+              recommended_action: "retry",
+              detail: "request timed out",
+            },
+          },
+        }}
+        toolName={(tool) => tool}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+        onRetry={onRetry}
+      />,
+    );
+
+    expect(screen.getByText("network_timeout")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalledOnce();
   });
 });

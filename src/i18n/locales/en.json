@@ -76,6 +76,8 @@
       "close": "Close",
       "installed": "Installed",
       "failed": "Failed",
+      "retry": "Retry",
+      "diagnostics": "Diagnostics",
       "action": {
         "install_node": "Install Node.js",
         "upgrade_node": "Upgrade Node.js",
