@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 pub enum Platform {
     Windows,
     Macos,
-    Linux,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -13,6 +12,17 @@ pub enum Platform {
 pub enum Architecture {
     X64,
     Arm64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolId {
+    Claude,
+    Codex,
+    Gemini,
+    Opencode,
+    Openclaw,
+    Hermes,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -77,7 +87,7 @@ pub enum InstallTaskStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InstallRequest {
     pub task_id: Option<String>,
-    pub tools: Vec<String>,
+    pub tools: Vec<ToolId>,
     pub action: InstallAction,
 }
 
@@ -91,11 +101,23 @@ pub struct ConfirmedInstallRequest {
 pub struct EnvironmentSnapshot {
     pub platform: Platform,
     pub architecture: Architecture,
+    pub architecture_supported: bool,
     pub node_version: Option<String>,
     pub npm_version: Option<String>,
     pub node_path: Option<String>,
     pub npm_path: Option<String>,
+    pub node_runnable: bool,
+    pub npm_runnable: bool,
+    pub node_path_visible: bool,
+    pub npm_path_visible: bool,
+    pub node_installations: Vec<String>,
+    pub npm_installations: Vec<String>,
     pub path: Vec<String>,
+    pub available_disk_bytes: u64,
+    pub temporary_directory_writable: bool,
+    pub install_directory_writable: bool,
+    pub npm_prefix_writable: bool,
+    pub npm_cache_writable: bool,
 }
 
 impl EnvironmentSnapshot {
@@ -103,11 +125,23 @@ impl EnvironmentSnapshot {
         Self {
             platform,
             architecture,
+            architecture_supported: true,
             node_version: None,
             npm_version: None,
             node_path: None,
             npm_path: None,
+            node_runnable: false,
+            npm_runnable: false,
+            node_path_visible: false,
+            npm_path_visible: false,
+            node_installations: Vec::new(),
+            npm_installations: Vec::new(),
             path: Vec::new(),
+            available_disk_bytes: u64::MAX,
+            temporary_directory_writable: true,
+            install_directory_writable: true,
+            npm_prefix_writable: true,
+            npm_cache_writable: true,
         }
     }
 
@@ -115,11 +149,23 @@ impl EnvironmentSnapshot {
         Self {
             platform: Platform::Windows,
             architecture: Architecture::X64,
+            architecture_supported: true,
             node_version: Some(node_version.into()),
             npm_version: Some(npm_version.into()),
             node_path: None,
             npm_path: None,
+            node_runnable: true,
+            npm_runnable: true,
+            node_path_visible: true,
+            npm_path_visible: true,
+            node_installations: Vec::new(),
+            npm_installations: Vec::new(),
             path: Vec::new(),
+            available_disk_bytes: u64::MAX,
+            temporary_directory_writable: true,
+            install_directory_writable: true,
+            npm_prefix_writable: true,
+            npm_cache_writable: true,
         }
     }
 }
@@ -128,7 +174,8 @@ impl EnvironmentSnapshot {
 pub struct RepairAction {
     pub id: String,
     pub kind: RepairActionKind,
-    pub requires_authorization: bool,
+    pub requires_confirmation: bool,
+    pub requires_elevation: bool,
     pub status: ActionStatus,
 }
 
@@ -139,7 +186,7 @@ pub struct RepairPlan {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolInstallResult {
-    pub tool: String,
+    pub tool: ToolId,
     pub status: ToolInstallStatus,
     pub version: Option<String>,
     pub path: Option<String>,
@@ -156,15 +203,41 @@ pub struct InstallTaskResult {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum InstallFailureCode {
+    UnsupportedPlatform,
+    UnsupportedArchitecture,
+    InsufficientDiskSpace,
     DependencyMissing,
-    DependencyUnsupported,
+    DependencyTooOld,
+    DependencyBroken,
+    PathNotVisible,
+    MultipleInstallations,
+    PermissionDenied,
     PrivilegeDeclined,
+    FileInUse,
+    DnsFailure,
+    NetworkTimeout,
+    ProxyUnreachable,
+    TlsFailure,
     DownloadIntegrityFailure,
-    NetworkFailure,
-    ToolInstallFailed,
-    VerificationFailed,
-    Cancelled,
-    Unknown,
+    SignatureVerificationFailure,
+    InstallerFailure,
+    ToolInstallFailure,
+    VerificationFailure,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RecommendedAction {
+    Retry,
+    RepairDependencies,
+    FreeDiskSpace,
+    GrantPermission,
+    CloseBlockingProcess,
+    CheckNetwork,
+    CheckProxy,
+    ResolveMultipleInstallations,
+    Reinstall,
+    ViewDiagnostics,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -175,7 +248,7 @@ pub struct InstallFailure {
     pub retryable: bool,
     pub requires_user_action: bool,
     pub message_key: String,
-    pub recommended_action: Option<String>,
+    pub recommended_action: RecommendedAction,
     pub detail: Option<String>,
 }
 
@@ -203,7 +276,10 @@ pub enum InstallTaskEvent {
 
 #[cfg(test)]
 mod tests {
-    use super::{InstallStage, InstallTaskEvent};
+    use super::{
+        ActionStatus, Architecture, EnvironmentSnapshot, InstallFailureCode, InstallStage,
+        InstallTaskEvent, Platform, RecommendedAction, RepairAction, RepairActionKind, ToolId,
+    };
 
     #[test]
     fn task_event_serializes_with_stable_wire_names() {
@@ -214,5 +290,135 @@ mod tests {
         let value = serde_json::to_value(event).unwrap();
         assert_eq!(value["type"], "stage_changed");
         assert_eq!(value["stage"], "preflight");
+    }
+
+    #[test]
+    fn tool_ids_serialize_with_stable_wire_names() {
+        let ids = [
+            ToolId::Claude,
+            ToolId::Codex,
+            ToolId::Gemini,
+            ToolId::Opencode,
+            ToolId::Openclaw,
+            ToolId::Hermes,
+        ];
+        let value = serde_json::to_value(ids).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!(["claude", "codex", "gemini", "opencode", "openclaw", "hermes"])
+        );
+    }
+
+    #[test]
+    fn failure_taxonomy_serializes_with_approved_wire_names() {
+        let cases = [
+            (
+                InstallFailureCode::UnsupportedPlatform,
+                "unsupported_platform",
+            ),
+            (
+                InstallFailureCode::UnsupportedArchitecture,
+                "unsupported_architecture",
+            ),
+            (
+                InstallFailureCode::InsufficientDiskSpace,
+                "insufficient_disk_space",
+            ),
+            (InstallFailureCode::DependencyMissing, "dependency_missing"),
+            (InstallFailureCode::DependencyTooOld, "dependency_too_old"),
+            (InstallFailureCode::DependencyBroken, "dependency_broken"),
+            (InstallFailureCode::PathNotVisible, "path_not_visible"),
+            (
+                InstallFailureCode::MultipleInstallations,
+                "multiple_installations",
+            ),
+            (InstallFailureCode::PermissionDenied, "permission_denied"),
+            (InstallFailureCode::PrivilegeDeclined, "privilege_declined"),
+            (InstallFailureCode::FileInUse, "file_in_use"),
+            (InstallFailureCode::DnsFailure, "dns_failure"),
+            (InstallFailureCode::NetworkTimeout, "network_timeout"),
+            (InstallFailureCode::ProxyUnreachable, "proxy_unreachable"),
+            (InstallFailureCode::TlsFailure, "tls_failure"),
+            (
+                InstallFailureCode::DownloadIntegrityFailure,
+                "download_integrity_failure",
+            ),
+            (
+                InstallFailureCode::SignatureVerificationFailure,
+                "signature_verification_failure",
+            ),
+            (InstallFailureCode::InstallerFailure, "installer_failure"),
+            (
+                InstallFailureCode::ToolInstallFailure,
+                "tool_install_failure",
+            ),
+            (
+                InstallFailureCode::VerificationFailure,
+                "verification_failure",
+            ),
+        ];
+
+        for (code, expected) in cases {
+            assert_eq!(serde_json::to_value(code).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn recommended_actions_use_typed_wire_names() {
+        assert_eq!(
+            serde_json::to_value(RecommendedAction::RepairDependencies).unwrap(),
+            "repair_dependencies"
+        );
+    }
+
+    #[test]
+    fn platform_is_limited_to_windows_and_macos() {
+        assert_eq!(
+            serde_json::from_str::<Platform>(r#""windows""#).unwrap(),
+            Platform::Windows
+        );
+        assert_eq!(
+            serde_json::from_str::<Platform>(r#""macos""#).unwrap(),
+            Platform::Macos
+        );
+        assert!(serde_json::from_str::<Platform>(r#""linux""#).is_err());
+    }
+
+    #[test]
+    fn environment_snapshot_carries_repair_planner_inputs() {
+        let mut snapshot = EnvironmentSnapshot::without_node(Platform::Windows, Architecture::X64);
+        snapshot.architecture_supported = false;
+        snapshot.node_version = Some("24.4.1".into());
+        snapshot.node_runnable = false;
+        snapshot.node_path_visible = false;
+        snapshot.node_installations = vec!["C:\\node-a".into(), "C:\\node-b".into()];
+        snapshot.available_disk_bytes = 1024;
+        snapshot.install_directory_writable = false;
+
+        assert!(!snapshot.architecture_supported);
+        assert!(!snapshot.node_runnable);
+        assert!(!snapshot.node_path_visible);
+        assert_eq!(snapshot.node_installations.len(), 2);
+        assert_eq!(snapshot.available_disk_bytes, 1024);
+        assert!(!snapshot.install_directory_writable);
+    }
+
+    #[test]
+    fn repair_actions_separate_confirmation_and_elevation() {
+        let action = RepairAction {
+            id: "refresh-path".into(),
+            kind: RepairActionKind::RefreshEnvironment,
+            requires_confirmation: false,
+            requires_elevation: true,
+            status: ActionStatus::Pending,
+        };
+
+        assert!(!action.requires_confirmation);
+        assert!(action.requires_elevation);
+    }
+
+    #[test]
+    fn tool_ids_reject_values_outside_the_supported_set() {
+        assert!(serde_json::from_str::<ToolId>(r#""unknown""#).is_err());
     }
 }
