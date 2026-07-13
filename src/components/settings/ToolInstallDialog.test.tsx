@@ -11,6 +11,10 @@ vi.mock("react-i18next", () => ({
         "settings.installer.continue": "Continue",
         "settings.installer.installed": "Installed",
         "settings.installer.failed": "Failed",
+        "settings.installer.retry": "Retry",
+        "settings.installer.diagnostics": "Diagnostics",
+        "settings.installer.failure.network_timeout":
+          "Network request timed out",
         "settings.installer.action.install_node": "Install Node.js",
       })[key] ?? key,
   }),
@@ -60,6 +64,8 @@ describe("ToolInstallDialog", () => {
   });
 
   it("shows successful and failed tools in one batch result", () => {
+    const onRetry = vi.fn();
+
     render(
       <ToolInstallDialog
         open
@@ -108,6 +114,7 @@ describe("ToolInstallDialog", () => {
         toolName={(tool) => (tool === "gemini" ? "Gemini CLI" : "Codex")}
         onConfirm={vi.fn()}
         onCancel={vi.fn()}
+        onRetry={onRetry}
       />,
     );
 
@@ -116,6 +123,9 @@ describe("ToolInstallDialog", () => {
     expect(screen.getByText("Installed")).toBeInTheDocument();
     expect(screen.getByText("Failed")).toBeInTheDocument();
     expect(screen.getByText("redacted diagnostic")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalledOnce();
   });
 
   it("requires fresh consent when a dialog is reopened for another task", () => {
@@ -194,5 +204,49 @@ describe("ToolInstallDialog", () => {
     expect(
       screen.getByText("interrupted before installing tools"),
     ).toBeInTheDocument();
+  });
+
+  it("shows diagnostics and retries a retryable task failure", () => {
+    const onRetry = vi.fn();
+
+    render(
+      <ToolInstallDialog
+        open
+        preparation={null}
+        task={{
+          task_id: "install-1",
+          request: { task_id: "install-1", tools: [], action: "install" },
+          stage: "completed",
+          plan: { actions: [] },
+          cancellation_requested: false,
+          interrupted: false,
+          result: {
+            status: "failed",
+            tools: [],
+            failure: {
+              code: "network_timeout",
+              stage: "repairing",
+              exit_code: null,
+              retryable: true,
+              requires_user_action: false,
+              message_key: "installer.failure",
+              recommended_action: "retry",
+              detail: "request timed out",
+            },
+          },
+        }}
+        toolName={(tool) => tool}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+        onRetry={onRetry}
+      />,
+    );
+
+    expect(screen.getByText("network_timeout")).toBeInTheDocument();
+    expect(screen.getByText("Network request timed out")).toBeInTheDocument();
+    expect(screen.getByText("Diagnostics")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalledOnce();
   });
 });

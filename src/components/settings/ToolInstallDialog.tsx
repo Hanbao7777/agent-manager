@@ -11,6 +11,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type {
+  InstallFailure,
   InstallPreparation,
   InstallTaskSnapshot,
   RepairAction,
@@ -24,10 +25,34 @@ interface ToolInstallDialogProps {
   toolName: (tool: ToolId) => string;
   onConfirm: (actionIds: string[]) => void;
   onCancel: () => void;
+  onRetry?: () => void;
 }
 
 const actionLabel = (action: RepairAction, t: (key: string) => string) =>
   t(`settings.installer.action.${action.kind}`);
+
+function FailureDetails({
+  failure,
+  t,
+}: {
+  failure: InstallFailure;
+  t: (key: string) => string;
+}) {
+  return (
+    <div className="mt-1 text-xs text-muted-foreground">
+      <code>{failure.code}</code>
+      <p>{t(`settings.installer.failure.${failure.code}`)}</p>
+      {failure.detail && (
+        <>
+          <p className="mt-1 font-medium">
+            {t("settings.installer.diagnostics")}
+          </p>
+          <p>{failure.detail}</p>
+        </>
+      )}
+    </div>
+  );
+}
 
 export function ToolInstallDialog({
   open,
@@ -36,6 +61,7 @@ export function ToolInstallDialog({
   toolName,
   onConfirm,
   onCancel,
+  onRetry,
 }: ToolInstallDialogProps) {
   const { t } = useTranslation();
   const [approved, setApproved] = useState<string[]>([]);
@@ -45,6 +71,9 @@ export function ToolInstallDialog({
   );
   const result = task?.result;
   const isProgress = Boolean(task && !result);
+  const canRetry =
+    result?.failure?.retryable ||
+    result?.tools.some((tool) => tool.failure?.retryable);
   const canContinue =
     !preparation?.requires_confirmation ||
     required.every((action) => approved.includes(action.id));
@@ -86,15 +115,13 @@ export function ToolInstallDialog({
         </DialogHeader>
         {result ? (
           <div className="space-y-2">
-            {result.failure?.detail && (
+            {result.failure && (
               <div className="rounded border border-red-500/20 bg-red-500/5 p-3 text-sm">
                 <div className="flex items-center gap-2 font-medium">
                   <XCircle className="h-4 w-4 text-red-600" />
                   {t("settings.installer.failed")}
                 </div>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {result.failure.detail}
-                </p>
+                <FailureDetails failure={result.failure} t={t} />
               </div>
             )}
             {result.tools.map((tool) => (
@@ -112,10 +139,8 @@ export function ToolInstallDialog({
                       : t("settings.installer.failed")}
                   </span>
                 </div>
-                {tool.failure?.detail && (
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {tool.failure.detail}
-                  </p>
+                {tool.failure && (
+                  <FailureDetails failure={tool.failure} t={t} />
                 )}
               </div>
             ))}
@@ -159,7 +184,16 @@ export function ToolInstallDialog({
               {t("settings.installer.cancel")}
             </Button>
           ) : result ? (
-            <Button onClick={onCancel}>{t("settings.installer.close")}</Button>
+            <>
+              {canRetry && onRetry && (
+                <Button variant="outline" onClick={onRetry}>
+                  {t("settings.installer.retry")}
+                </Button>
+              )}
+              <Button onClick={onCancel}>
+                {t("settings.installer.close")}
+              </Button>
+            </>
           ) : (
             <>
               <Button variant="outline" onClick={onCancel}>
