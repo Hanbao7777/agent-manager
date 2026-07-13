@@ -51,7 +51,9 @@ pub fn run() {
     }
 
     let builder = builder
-        .manage(installer::InstallTaskStore::default())
+        .manage(installer::InstallTaskStore::with_persistence(
+            panic_hook::get_app_config_dir(),
+        ))
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(window_state_flags())

@@ -26,13 +26,75 @@ pub trait OrchestratorRuntime: Send + Sync {
     fn install_tool(&self, tool: ToolId) -> ToolInstallResult;
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct InstallTaskStore {
     tasks: Arc<RwLock<HashMap<String, InstallTaskSnapshot>>>,
     cancellations: Arc<RwLock<HashMap<String, Arc<AtomicBool>>>>,
+    persistence_path: Option<Arc<PathBuf>>,
+}
+
+impl Default for InstallTaskStore {
+    fn default() -> Self {
+        Self {
+            tasks: Arc::default(),
+            cancellations: Arc::default(),
+            persistence_path: None,
+        }
+    }
 }
 
 impl InstallTaskStore {
+    pub fn with_persistence(config_dir: PathBuf) -> Self {
+        let path = config_dir.join("install-tasks.json");
+        let tasks = std::fs::read(&path)
+            .ok()
+            .and_then(|data| serde_json::from_slice::<Vec<InstallTaskSnapshot>>(&data).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|mut task| {
+                // Interrupted installer work is never resumed, especially not a
+                // privileged package command. The next user action re-probes.
+                if task.stage != InstallStage::Completed {
+                    task.interrupted = true;
+                    task.cancellation_requested = false;
+                    task.stage = InstallStage::Completed;
+                    task.result = Some(InstallTaskResult {
+                        status: InstallTaskStatus::NeedsUserAction,
+                        tools: Vec::new(),
+                        failure: Some(failure(
+                            InstallFailureCode::InstallerFailure,
+                            "installation was interrupted; run preflight again",
+                        )),
+                    });
+                }
+                (task.task_id.clone(), task)
+            })
+            .collect();
+        let store = Self {
+            tasks: Arc::new(RwLock::new(tasks)),
+            cancellations: Arc::default(),
+            persistence_path: Some(Arc::new(path)),
+        };
+        store.persist();
+        store
+    }
+
+    fn persist(&self) {
+        let Some(path) = &self.persistence_path else {
+            return;
+        };
+        let Ok(tasks) = self.tasks.read() else { return };
+        let Ok(data) = serde_json::to_vec(&tasks.values().collect::<Vec<_>>()) else {
+            return;
+        };
+        let Some(parent) = path.parent() else { return };
+        if std::fs::create_dir_all(parent).is_ok() {
+            let temp = path.with_extension("json.tmp");
+            if std::fs::write(&temp, data).is_ok() {
+                let _ = std::fs::rename(temp, path.as_ref());
+            }
+        }
+    }
     pub fn get(&self, task_id: &str) -> Option<InstallTaskSnapshot> {
         self.tasks.read().ok()?.get(task_id).cloned()
     }
@@ -86,6 +148,8 @@ impl InstallTaskStore {
             .write()
             .expect("task store poisoned")
             .insert(task_id.clone(), Arc::new(AtomicBool::new(false)));
+        drop(tasks);
+        self.persist();
         Ok(InstallPreparation {
             task_id,
             plan,
@@ -124,10 +188,13 @@ impl InstallTaskStore {
                 "required action was not confirmed",
             ));
         }
-        if task.stage == InstallStage::Completed {
+        if !matches!(
+            task.stage,
+            InstallStage::Preflight | InstallStage::AwaitingConfirmation
+        ) {
             return Err(failure(
                 InstallFailureCode::InstallerFailure,
-                "task already completed",
+                "task has already started or completed",
             ));
         }
         task.stage = if task.plan.actions.is_empty() {
@@ -135,10 +202,23 @@ impl InstallTaskStore {
         } else {
             InstallStage::Repairing
         };
-        self.tasks
-            .write()
-            .expect("task store poisoned")
-            .insert(task_id.clone(), task.clone());
+        {
+            let mut tasks = self.tasks.write().expect("task store poisoned");
+            let current = tasks
+                .get(&task_id)
+                .ok_or_else(|| failure(InstallFailureCode::InstallerFailure, "unknown task"))?;
+            if !matches!(
+                current.stage,
+                InstallStage::Preflight | InstallStage::AwaitingConfirmation
+            ) {
+                return Err(failure(
+                    InstallFailureCode::InstallerFailure,
+                    "task has already started or completed",
+                ));
+            }
+            tasks.insert(task_id.clone(), task.clone());
+        }
+        self.persist();
         let cancelled = self
             .cancellations
             .read()
@@ -166,6 +246,7 @@ impl InstallTaskStore {
                     .write()
                     .expect("task store poisoned")
                     .insert(task_id.clone(), task);
+                self.persist();
                 return Ok(task_id);
             }
         }
@@ -177,6 +258,7 @@ impl InstallTaskStore {
             .write()
             .expect("task store poisoned")
             .insert(task_id.clone(), task.clone());
+        self.persist();
         let mut results = Vec::new();
         for tool in task.request.tools.iter().copied() {
             if cancelled.load(Ordering::Acquire) {
@@ -202,6 +284,7 @@ impl InstallTaskStore {
             .write()
             .expect("task store poisoned")
             .insert(task_id.clone(), task);
+        self.persist();
         Ok(task_id)
     }
 
@@ -230,6 +313,8 @@ impl InstallTaskStore {
         {
             token.store(true, Ordering::Release);
         }
+        drop(tasks);
+        self.persist();
         Ok(())
     }
 
@@ -249,6 +334,7 @@ impl InstallTaskStore {
             .write()
             .expect("task store poisoned")
             .insert(task_id.clone(), task);
+        self.persist();
         Ok(task_id)
     }
 }
@@ -559,5 +645,28 @@ mod tests {
             store.get("task").unwrap().result.unwrap().status,
             InstallTaskStatus::Succeeded
         );
+    }
+
+    #[test]
+    fn persisted_active_task_is_marked_interrupted_without_resuming() {
+        let root = std::env::temp_dir().join(format!("installer-store-{}", std::process::id()));
+        let store = InstallTaskStore::with_persistence(root.clone());
+        let request = InstallRequest {
+            task_id: Some("persisted".into()),
+            tools: vec![ToolId::Codex],
+            action: super::super::InstallAction::Install,
+        };
+        store.prepare(request, &Fake).unwrap();
+        drop(store);
+
+        let restored = InstallTaskStore::with_persistence(root.clone());
+        let task = restored.get("persisted").unwrap();
+        assert!(task.interrupted);
+        assert_eq!(task.stage, InstallStage::Completed);
+        assert_eq!(
+            task.result.unwrap().status,
+            InstallTaskStatus::NeedsUserAction
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 }

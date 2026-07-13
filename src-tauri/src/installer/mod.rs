@@ -62,15 +62,30 @@ pub fn start_tool_install(
         .get(&task_id)
         .ok_or_else(|| "unknown install task".to_string())?
         .plan;
-    if !plan.actions.is_empty() {
-        emit_stage(&app, &task_id, InstallStage::Repairing);
-    }
-    emit_stage(&app, &task_id, InstallStage::InstallingTools);
-    emit_stage(&app, &task_id, InstallStage::Verifying);
     let task_id = store
         .start(request, &CommandRuntime)
         .map_err(|error| error.detail.unwrap_or_else(|| error.message_key))?;
     if let Some(task) = store.get(&task_id) {
+        // `start` executes synchronously. Emit only transitions that the task
+        // actually reached, rather than claiming tool work after repair failed.
+        if !plan.actions.is_empty() {
+            emit_stage(&app, &task_id, InstallStage::Repairing);
+        }
+        if let Some(result) = task.result.as_ref() {
+            if !result.tools.is_empty() {
+                emit_stage(&app, &task_id, InstallStage::InstallingTools);
+                emit_stage(&app, &task_id, InstallStage::Verifying);
+                for tool_result in &result.tools {
+                    let _ = app.emit(
+                        "agent-manager://install-task",
+                        InstallTaskEvent::ToolFinished {
+                            task_id: task_id.clone(),
+                            result: tool_result.clone(),
+                        },
+                    );
+                }
+            }
+        }
         let _ = app.emit(
             "agent-manager://install-task",
             InstallTaskEvent::Finished {

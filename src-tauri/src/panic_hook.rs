@@ -25,7 +25,7 @@ pub fn default_app_config_dir() -> PathBuf {
 }
 
 /// 获取应用配置目录（优先使用初始化时写入的值；不会 panic）
-fn get_app_config_dir() -> PathBuf {
+pub fn get_app_config_dir() -> PathBuf {
     APP_CONFIG_DIR
         .get()
         .cloned()
