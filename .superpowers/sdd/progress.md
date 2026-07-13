@@ -14,8 +14,8 @@ Tasks:
 - Task 3: complete (commit `970faaf1`, passed spec and quality review)
 - Task 4: complete recovery (`task_d8843c61c323`; commits `19a67d49`, `3bbce1bb`, and `7991c6f5`; review ledger follows in this commit)
 - Task 5: complete recovery (base `0248844c`, ledger `c65f4586`, secure-adapter corrections `1569ef50`); prior dispatch `task_e8174f0aafbb` ended in three premature worker terminations, then this revalidation added adapter-boundary coverage for LTS assets, integrity ordering, cleanup, signature/authorization failures, and PATH parsing.
-- Task 6: implemented and under final review (commits `4418442d`, `7525081c`, `bdce98d1`, and the current async correction); task persistence marks interrupted work for a new preflight and never resumes privileged work, while native installs now run in a background worker.
-- Task 7: complete (commits `4a3489c0` and `8b114bc3`; typed installer API, localized reusable dialog, confirmation reset, startup recovery replay, and task-level failure diagnostics passed review)
+- Task 6: implemented and under final review (commits `4418442d`, `7525081c`, `bdce98d1`, `6e7df1dc`, `b9ba685a`, `a785bb2f`, `fd77cedb`, `202ca9a9`, and `f8dcc04d`); task persistence marks interrupted work for a new preflight and never resumes privileged work, while native installs run in a background worker with corrected scheduling, transition events, validated Node/npm pairing, recovery, and Hermes failure handling.
+- Task 7: incomplete after recovery (implementation `4a3489c0` and state hardening `8b114bc3`); the typed installer API, localized reusable dialog, confirmation reset, startup recovery replay, and task-level failure details remain. The retry and diagnostics additions in `dc736015` were reverted by `da305f02`, leaving the required localized failure codes, retry behavior, and diagnostics incomplete.
 - Task 8: pending
 - Task 9: pending
 
