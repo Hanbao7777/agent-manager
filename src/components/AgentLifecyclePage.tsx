@@ -493,6 +493,7 @@ export function AgentLifecyclePage() {
         });
         if (disposed) unlistenInstall();
         else unlistenInstallEvents.current = unlistenInstall;
+        if (disposed) return;
         const unlistenExit = await installerApi.listenExitBlocked(() => {
           if (disposed) return;
           setInstallFlow((flow) => ({ ...flow, visible: true }));
@@ -502,7 +503,9 @@ export function AgentLifecyclePage() {
         });
         if (disposed) unlistenExit();
         else unlistenExitBlocked.current = unlistenExit;
+        if (disposed) return;
         const active = await installerApi.getActiveTask();
+        if (disposed) return;
         if (active && !disposed) {
           activeInstallTaskId.current = active.task_id;
           setInstallFlow({

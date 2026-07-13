@@ -146,6 +146,26 @@ describe("AgentLifecyclePage characterization", () => {
     expect(screen.getByText("Hermes")).toBeInTheDocument();
   });
 
+  it("cleans a listener that resolves after unmount without replaying recovery", async () => {
+    let resolveListener!: (unlisten: () => void) => void;
+    const lateListener = new Promise<() => void>((resolve) => {
+      resolveListener = resolve;
+    });
+    const unlisten = vi.fn();
+    listenAllInstall.mockReturnValue(lateListener);
+
+    const view = render(<AgentLifecyclePage />);
+    await waitFor(() => expect(listenAllInstall).toHaveBeenCalledOnce());
+    view.unmount();
+    resolveListener(unlisten);
+    await lateListener;
+
+    expect(unlisten).toHaveBeenCalledOnce();
+    expect(listenExitBlocked).not.toHaveBeenCalled();
+    expect(getActiveInstall).not.toHaveBeenCalled();
+    expect(replayInstall).not.toHaveBeenCalled();
+  });
+
   it("routes native installs through the installer API and preserves diagnosis after closing the flow", async () => {
     render(<AgentLifecyclePage />);
     const installButtons = await screen.findAllByText("settings.toolInstall");
