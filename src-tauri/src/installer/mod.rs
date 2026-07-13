@@ -64,43 +64,15 @@ pub fn start_tool_install(
     let task_store = store.inner().clone();
     let emitted_task_id = task_id.clone();
     std::thread::spawn(move || {
-        let completed_id = task_store
-            .start(request, &CommandRuntime)
-            .unwrap_or(emitted_task_id);
-        if let Some(task) = task_store.get(&completed_id) {
-            emit_reached_events(&app, &task);
-        }
+        let event_app = app.clone();
+        let _ = task_store.start_with_events(request, &CommandRuntime, move |event| {
+            let _ = event_app.emit("agent-manager://install-task", event);
+        });
+        // The validation failure is retained in the store only when a task
+        // existed; no synthetic stage sequence is emitted after the fact.
+        let _ = emitted_task_id;
     });
     Ok(task_id)
-}
-
-fn emit_reached_events(app: &tauri::AppHandle, task: &InstallTaskSnapshot) {
-    if !task.plan.actions.is_empty() {
-        emit_stage(app, &task.task_id, InstallStage::Repairing);
-    }
-    if let Some(result) = task.result.as_ref() {
-        if !result.tools.is_empty() {
-            emit_stage(app, &task.task_id, InstallStage::InstallingTools);
-            emit_stage(app, &task.task_id, InstallStage::Verifying);
-            for tool_result in &result.tools {
-                let _ = app.emit(
-                    "agent-manager://install-task",
-                    InstallTaskEvent::ToolFinished {
-                        task_id: task.task_id.clone(),
-                        result: tool_result.clone(),
-                    },
-                );
-            }
-        }
-        emit_stage(app, &task.task_id, InstallStage::Completed);
-        let _ = app.emit(
-            "agent-manager://install-task",
-            InstallTaskEvent::Finished {
-                task_id: task.task_id.clone(),
-                result: result.clone(),
-            },
-        );
-    }
 }
 
 fn emit_stage(app: &tauri::AppHandle, task_id: &str, stage: InstallStage) {

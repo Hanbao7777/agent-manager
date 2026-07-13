@@ -162,6 +162,15 @@ impl InstallTaskStore {
         confirmed: ConfirmedInstallRequest,
         runtime: &R,
     ) -> Result<String, InstallFailure> {
+        self.start_with_events(confirmed, runtime, |_| {})
+    }
+
+    pub fn start_with_events<R: OrchestratorRuntime, F: FnMut(super::InstallTaskEvent)>(
+        &self,
+        confirmed: ConfirmedInstallRequest,
+        runtime: &R,
+        mut emit: F,
+    ) -> Result<String, InstallFailure> {
         let task_id = confirmed
             .request
             .task_id
@@ -219,6 +228,10 @@ impl InstallTaskStore {
             tasks.insert(task_id.clone(), task.clone());
         }
         self.persist();
+        emit(super::InstallTaskEvent::StageChanged {
+            task_id: task_id.clone(),
+            stage: task.stage.clone(),
+        });
         let cancelled = self
             .cancellations
             .read()
@@ -232,7 +245,9 @@ impl InstallTaskStore {
                 )
             })?;
         if cancelled.load(Ordering::Acquire) {
-            return self.finish_cancelled(task_id, task);
+            let task_id = self.finish_cancelled(task_id, task)?;
+            self.emit_terminal(&task_id, &mut emit);
+            return Ok(task_id);
         }
         if !task.plan.actions.is_empty() {
             if let Err(error) = runtime.repair(&task.plan) {
@@ -247,26 +262,51 @@ impl InstallTaskStore {
                     .expect("task store poisoned")
                     .insert(task_id.clone(), task);
                 self.persist();
+                self.emit_terminal(&task_id, &mut emit);
                 return Ok(task_id);
             }
         }
         if cancelled.load(Ordering::Acquire) {
-            return self.finish_cancelled(task_id, task);
+            let task_id = self.finish_cancelled(task_id, task)?;
+            self.emit_terminal(&task_id, &mut emit);
+            return Ok(task_id);
         }
-        task.stage = InstallStage::InstallingTools;
+        if !task.plan.actions.is_empty() {
+            task.stage = InstallStage::InstallingTools;
+            self.tasks
+                .write()
+                .expect("task store poisoned")
+                .insert(task_id.clone(), task.clone());
+            self.persist();
+            emit(super::InstallTaskEvent::StageChanged {
+                task_id: task_id.clone(),
+                stage: InstallStage::InstallingTools,
+            });
+        }
+        let mut results = Vec::new();
+        for tool in task.request.tools.iter().copied() {
+            if cancelled.load(Ordering::Acquire) {
+                let task_id = self.finish_cancelled(task_id, task)?;
+                self.emit_terminal(&task_id, &mut emit);
+                return Ok(task_id);
+            }
+            let result = runtime.install_tool(tool);
+            emit(super::InstallTaskEvent::ToolFinished {
+                task_id: task_id.clone(),
+                result: result.clone(),
+            });
+            results.push(result);
+        }
+        task.stage = InstallStage::Verifying;
         self.tasks
             .write()
             .expect("task store poisoned")
             .insert(task_id.clone(), task.clone());
         self.persist();
-        let mut results = Vec::new();
-        for tool in task.request.tools.iter().copied() {
-            if cancelled.load(Ordering::Acquire) {
-                return self.finish_cancelled(task_id, task);
-            }
-            results.push(runtime.install_tool(tool));
-        }
-        task.stage = InstallStage::Verifying;
+        emit(super::InstallTaskEvent::StageChanged {
+            task_id: task_id.clone(),
+            stage: InstallStage::Verifying,
+        });
         let failed = results
             .iter()
             .any(|result| result.status != ToolInstallStatus::Succeeded);
@@ -285,6 +325,7 @@ impl InstallTaskStore {
             .expect("task store poisoned")
             .insert(task_id.clone(), task);
         self.persist();
+        self.emit_terminal(&task_id, &mut emit);
         Ok(task_id)
     }
 
@@ -336,6 +377,21 @@ impl InstallTaskStore {
             .insert(task_id.clone(), task);
         self.persist();
         Ok(task_id)
+    }
+
+    fn emit_terminal<F: FnMut(super::InstallTaskEvent)>(&self, task_id: &str, emit: &mut F) {
+        let Some(task) = self.get(task_id) else {
+            return;
+        };
+        let Some(result) = task.result else { return };
+        emit(super::InstallTaskEvent::StageChanged {
+            task_id: task_id.into(),
+            stage: InstallStage::Completed,
+        });
+        emit(super::InstallTaskEvent::Finished {
+            task_id: task_id.into(),
+            result,
+        });
     }
 }
 
