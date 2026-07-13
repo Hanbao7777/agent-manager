@@ -5,6 +5,7 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::path::Path;
 use std::str::FromStr;
+use tauri::State;
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -98,11 +99,60 @@ pub async fn run_tool_lifecycle_action(
     tools: Vec<String>,
     action: String,
     wsl_shell_by_tool: Option<HashMap<String, WslShellPreferenceInput>>,
+    install_tasks: State<'_, crate::installer::InstallTaskStore>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
     let action = ToolLifecycleAction::from_str(&action)?;
     let requested = normalize_requested_tools(&tools);
     if requested.is_empty() {
         return Err("No supported tools selected".to_string());
+    }
+
+    // Native installs use the orchestrator compatibility entry. WSL installs
+    // and all updates continue through the established shell lifecycle below.
+    let has_wsl_tools = wsl_shell_by_tool
+        .as_ref()
+        .is_some_and(|preferences| requested.iter().any(|tool| preferences.contains_key(*tool)));
+    if matches!(action, ToolLifecycleAction::Install) && !has_wsl_tools {
+        let tool_ids = requested
+            .iter()
+            .filter_map(|tool| {
+                serde_json::from_str::<crate::installer::ToolId>(&format!("\"{tool}\"")).ok()
+            })
+            .collect();
+        let tool_ids: Vec<crate::installer::ToolId> = requested
+            .iter()
+            .filter_map(|tool| {
+                serde_json::from_str::<crate::installer::ToolId>(&format!("\"{tool}\"")).ok()
+            })
+            .collect();
+        let preparation = crate::installer::prepare_tool_install(
+            crate::installer::InstallRequest {
+                task_id: None,
+                tools: tool_ids.clone(),
+                action: crate::installer::InstallAction::Install,
+            },
+            install_tasks.clone(),
+        )?;
+        if preparation.requires_confirmation {
+            return Err(format!(
+                "install task {} requires confirmation",
+                preparation.task_id
+            ));
+        }
+        crate::installer::start_tool_install(
+            crate::installer::ConfirmedInstallRequest {
+                request: crate::installer::InstallRequest {
+                    task_id: Some(preparation.task_id),
+                    tools: tool_ids,
+                    action: crate::installer::InstallAction::Install,
+                },
+                confirmed_action_ids: Vec::new(),
+            },
+            install_tasks,
+            app,
+        )?;
+        return Ok(());
     }
 
     let label = match action {

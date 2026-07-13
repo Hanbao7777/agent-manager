@@ -98,6 +98,24 @@ pub struct ConfirmedInstallRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InstallPreparation {
+    pub task_id: String,
+    pub plan: RepairPlan,
+    pub requires_confirmation: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InstallTaskSnapshot {
+    pub task_id: String,
+    pub request: InstallRequest,
+    pub stage: InstallStage,
+    pub plan: RepairPlan,
+    pub result: Option<InstallTaskResult>,
+    pub cancellation_requested: bool,
+    pub interrupted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EnvironmentSnapshot {
     pub platform: Platform,
     pub architecture: Architecture,

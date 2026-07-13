@@ -51,6 +51,7 @@ pub fn run() {
     }
 
     let builder = builder
+        .manage(installer::InstallTaskStore::default())
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(window_state_flags())
@@ -113,6 +114,10 @@ pub fn run() {
             commands::run_tool_lifecycle_action,
             commands::probe_tool_installations,
             commands::set_window_theme,
+            installer::prepare_tool_install,
+            installer::start_tool_install,
+            installer::get_install_task,
+            installer::cancel_install_task,
         ]);
 
     let app = builder
