@@ -13,7 +13,7 @@ Tasks:
 - Task 2: complete (commit `ca2a47b5`, passed spec and quality review)
 - Task 3: complete (commit `970faaf1`, passed spec and quality review)
 - Task 4: complete recovery (`task_d8843c61c323`; commits `19a67d49`, `3bbce1bb`, and `7991c6f5`; review ledger follows in this commit)
-- Task 5: recovered after prior dispatch `task_e8174f0aafbb` ended in three premature worker terminations; corrections are recorded in the focused follow-up commit.
+- Task 5: complete recovery (base `0248844c`, ledger `c65f4586`, secure-adapter corrections `1569ef50`); prior dispatch `task_e8174f0aafbb` ended in three premature worker terminations, then this revalidation confirmed both review gates with focused regression coverage.
 - Task 6: pending
 - Task 7: pending
 - Task 8: pending
@@ -26,7 +26,7 @@ Verification notes:
 - Task 3: formatter, diff, and scope checks passed. Focused probe, repair, and legacy misc test attempts are blocked before project compilation by the same missing MSVC linker.
 - Task 4: `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`, `git diff --check`, and `git show --check` passed. Focused verifier tests remain blocked before project compilation because MSVC `link.exe` is unavailable.
 - Task 4: `opencode-ai` remains the repository's established OpenCode fallback package contract from `commands/misc.rs`. No CI rerun was attempted because the recorded Windows/macOS workflow failures are account billing or spending-limit failures before job execution.
-- Task 5 recovery: formatter and diff checks passed. Platform tests and `cargo check` are blocked before project compilation because local MSVC `link.exe` is unavailable; GitHub Actions was not retried because the recorded billing/spending limit prevents job steps.
+- Task 5 recovery: `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`, `git diff --check`, and `git show --check 1569ef50` passed. Platform tests and `cargo check` are blocked before project compilation because local MSVC `link.exe` is unavailable; GitHub Actions was not retried because the recorded billing/spending limit prevents job steps.
 - Task 2 platform runs `29262339132` (Windows) and `29262341594` (macOS) failed before any job step because GitHub reported failed account payments or an insufficient spending limit. No platform compile/test evidence was produced; do not rerun until billing is restored.
 
 Coordination notes:

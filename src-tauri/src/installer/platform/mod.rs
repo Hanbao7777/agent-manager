@@ -202,12 +202,9 @@ pub async fn download_and_verify_node(
         .bytes()
         .await
         .map_err(|error| failure(InstallFailureCode::NetworkTimeout, &error.to_string()))?;
-    if sha256_hex(&bytes) != expected {
+    if let Err(error) = verify_sha256(&bytes, &expected) {
         let _ = fs::remove_dir_all(task_temp);
-        return Err(failure(
-            InstallFailureCode::DownloadIntegrityFailure,
-            "SHA-256 mismatch",
-        ));
+        return Err(error);
     }
     let package = task_temp.join(&release.asset_name);
     fs::write(&package, bytes)
@@ -243,6 +240,17 @@ pub fn checksum_for_asset(checksums: &str, asset_name: &str) -> Option<String> {
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+pub fn verify_sha256(bytes: &[u8], expected: &str) -> Result<(), InstallFailure> {
+    (sha256_hex(bytes) == expected)
+        .then_some(())
+        .ok_or_else(|| {
+            failure(
+                InstallFailureCode::DownloadIntegrityFailure,
+                "SHA-256 mismatch",
+            )
+        })
 }
 
 pub fn install_node(adapter: &dyn PlatformAdapter, package: &Path) -> Result<(), InstallFailure> {
@@ -366,6 +374,22 @@ mod tests {
             24
         );
     }
+
+    #[test]
+    fn skips_newer_lts_without_the_exact_platform_asset() {
+        let index = r#"[{"version":"v24.2.0","lts":"Iron","files":["node-v24.2.0-arm64.msi"]},{"version":"v24.1.0","lts":"Iron","files":["node-v24.1.0-x64.msi"]}]"#;
+
+        let release = resolve_node_release(
+            index,
+            &crate::installer::node_policy(),
+            &TestAdapter,
+            Architecture::X64,
+        )
+        .unwrap();
+
+        assert_eq!(release.version, "v24.1.0");
+        assert_eq!(release.asset_name, "node-v24.1.0-x64.msi");
+    }
     #[test]
     fn checksum_requires_exact_asset() {
         assert_eq!(
@@ -375,6 +399,17 @@ mod tests {
         );
         assert!(
             checksum_for_asset(&format!("{}  other.msi", "a".repeat(64)), "node-v24.msi").is_none()
+        );
+    }
+
+    #[test]
+    fn checksum_mismatch_is_detected_before_a_package_is_written() {
+        let downloaded = b"tampered package";
+        let expected = sha256_hex(b"official package");
+
+        assert_eq!(
+            verify_sha256(downloaded, &expected).unwrap_err().code,
+            InstallFailureCode::DownloadIntegrityFailure
         );
     }
 
