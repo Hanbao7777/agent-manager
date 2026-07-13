@@ -15,7 +15,7 @@ Tasks:
 - Task 4: complete recovery (`task_d8843c61c323`; commits `19a67d49`, `3bbce1bb`, and `7991c6f5`; review ledger follows in this commit)
 - Task 5: complete recovery (base `0248844c`, ledger `c65f4586`, secure-adapter corrections `1569ef50`); prior dispatch `task_e8174f0aafbb` ended in three premature worker terminations, then this revalidation added adapter-boundary coverage for LTS assets, integrity ordering, cleanup, signature/authorization failures, and PATH parsing.
 - Task 6: implemented and under final review (commits `4418442d`, `7525081c`, `bdce98d1`, and the current async correction); task persistence marks interrupted work for a new preflight and never resumes privileged work, while native installs now run in a background worker.
-- Task 7: pending
+- Task 7: complete (commits `4a3489c0` and `8b114bc3`; typed installer API, localized reusable dialog, confirmation reset, startup recovery replay, and task-level failure diagnostics passed review)
 - Task 8: pending
 - Task 9: pending
 

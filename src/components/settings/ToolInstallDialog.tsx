@@ -24,7 +24,6 @@ interface ToolInstallDialogProps {
   toolName: (tool: ToolId) => string;
   onConfirm: (actionIds: string[]) => void;
   onCancel: () => void;
-  onRetry?: () => void;
 }
 
 const actionLabel = (action: RepairAction, t: (key: string) => string) =>
@@ -37,7 +36,6 @@ export function ToolInstallDialog({
   toolName,
   onConfirm,
   onCancel,
-  onRetry,
 }: ToolInstallDialogProps) {
   const { t } = useTranslation();
   const [approved, setApproved] = useState<string[]>([]);
@@ -93,13 +91,7 @@ export function ToolInstallDialog({
                 <div className="flex items-center gap-2 font-medium">
                   <XCircle className="h-4 w-4 text-red-600" />
                   {t("settings.installer.failed")}
-                  <code className="text-xs text-muted-foreground">
-                    {result.failure.code}
-                  </code>
                 </div>
-                <p className="mt-1 text-xs font-medium text-muted-foreground">
-                  {t("settings.installer.diagnostics")}
-                </p>
                 <p className="mt-1 text-xs text-muted-foreground">
                   {result.failure.detail}
                 </p>
@@ -121,10 +113,9 @@ export function ToolInstallDialog({
                   </span>
                 </div>
                 {tool.failure?.detail && (
-                  <div className="mt-1 text-xs text-muted-foreground">
-                    <code>{tool.failure.code}</code>
-                    <p>{tool.failure.detail}</p>
-                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {tool.failure.detail}
+                  </p>
                 )}
               </div>
             ))}
@@ -168,16 +159,7 @@ export function ToolInstallDialog({
               {t("settings.installer.cancel")}
             </Button>
           ) : result ? (
-            <>
-              {result.failure?.retryable && onRetry && (
-                <Button variant="outline" onClick={onRetry}>
-                  {t("settings.installer.retry")}
-                </Button>
-              )}
-              <Button onClick={onCancel}>
-                {t("settings.installer.close")}
-              </Button>
-            </>
+            <Button onClick={onCancel}>{t("settings.installer.close")}</Button>
           ) : (
             <>
               <Button variant="outline" onClick={onCancel}>

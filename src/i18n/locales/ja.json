@@ -76,8 +76,6 @@
       "close": "閉じる",
       "installed": "インストール済み",
       "failed": "失敗",
-      "retry": "再試行",
-      "diagnostics": "診断情報",
       "action": {
         "install_node": "Node.js をインストール",
         "upgrade_node": "Node.js をアップグレード",

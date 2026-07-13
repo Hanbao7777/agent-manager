@@ -76,8 +76,6 @@
       "close": "关闭",
       "installed": "已安装",
       "failed": "失败",
-      "retry": "重试",
-      "diagnostics": "诊断信息",
       "action": {
         "install_node": "安装 Node.js",
         "upgrade_node": "升级 Node.js",
