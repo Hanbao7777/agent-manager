@@ -14,9 +14,9 @@ pub use failure::{classify_process_failure, redact_diagnostic};
 pub use model::*;
 pub use orchestrator::{CommandRuntime, InstallTaskStore, OrchestratorRuntime};
 pub use platform::{
-    cleanup_task_temp, download_and_verify_node, install_node, install_node_release,
-    refresh_environment, resolve_node_release, selected_environment, NodeRelease, PlatformAdapter,
-    TaskTempGuard,
+    cleanup_task_temp, download_and_verify_node, fetch_node_index, install_node,
+    install_node_release, refresh_environment, resolve_node_release, selected_environment,
+    NodeRelease, PlatformAdapter, TaskTempGuard,
 };
 pub use policy::{node_policy, NodePolicy};
 pub use probe::{CommandProbe, ProbeConfig, ProbeRunner, SystemProbe};
@@ -31,10 +31,20 @@ pub use verifier::{
 pub fn prepare_tool_install(
     request: InstallRequest,
     store: tauri::State<'_, InstallTaskStore>,
+    app: tauri::AppHandle,
 ) -> Result<InstallPreparation, String> {
-    store
+    let preparation = store
         .prepare(request, &CommandRuntime)
-        .map_err(|error| error.detail.unwrap_or_else(|| error.message_key))
+        .map_err(|error| error.detail.unwrap_or_else(|| error.message_key))?;
+    emit_stage(&app, &preparation.task_id, InstallStage::Preflight);
+    if preparation.requires_confirmation {
+        emit_stage(
+            &app,
+            &preparation.task_id,
+            InstallStage::AwaitingConfirmation,
+        );
+    }
+    Ok(preparation)
 }
 
 #[tauri::command]
@@ -43,6 +53,20 @@ pub fn start_tool_install(
     store: tauri::State<'_, InstallTaskStore>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
+    let task_id = request
+        .request
+        .task_id
+        .clone()
+        .ok_or_else(|| "missing task id".to_string())?;
+    let plan = store
+        .get(&task_id)
+        .ok_or_else(|| "unknown install task".to_string())?
+        .plan;
+    if !plan.actions.is_empty() {
+        emit_stage(&app, &task_id, InstallStage::Repairing);
+    }
+    emit_stage(&app, &task_id, InstallStage::InstallingTools);
+    emit_stage(&app, &task_id, InstallStage::Verifying);
     let task_id = store
         .start(request, &CommandRuntime)
         .map_err(|error| error.detail.unwrap_or_else(|| error.message_key))?;
@@ -60,6 +84,16 @@ pub fn start_tool_install(
         );
     }
     Ok(task_id)
+}
+
+fn emit_stage(app: &tauri::AppHandle, task_id: &str, stage: InstallStage) {
+    let _ = app.emit(
+        "agent-manager://install-task",
+        InstallTaskEvent::StageChanged {
+            task_id: task_id.into(),
+            stage,
+        },
+    );
 }
 
 #[tauri::command]

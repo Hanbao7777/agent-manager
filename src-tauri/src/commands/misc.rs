@@ -114,12 +114,6 @@ pub async fn run_tool_lifecycle_action(
         .as_ref()
         .is_some_and(|preferences| requested.iter().any(|tool| preferences.contains_key(*tool)));
     if matches!(action, ToolLifecycleAction::Install) && !has_wsl_tools {
-        let tool_ids = requested
-            .iter()
-            .filter_map(|tool| {
-                serde_json::from_str::<crate::installer::ToolId>(&format!("\"{tool}\"")).ok()
-            })
-            .collect();
         let tool_ids: Vec<crate::installer::ToolId> = requested
             .iter()
             .filter_map(|tool| {

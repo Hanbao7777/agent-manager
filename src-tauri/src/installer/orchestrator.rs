@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
+        Arc, RwLock,
     },
 };
 
@@ -13,7 +13,10 @@ use super::{
     ToolInstallResult, ToolInstallStatus,
 };
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::atomic::AtomicBool,
+};
 
 static NEXT_TASK_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -25,17 +28,18 @@ pub trait OrchestratorRuntime: Send + Sync {
 
 #[derive(Clone, Default)]
 pub struct InstallTaskStore {
-    tasks: Arc<Mutex<HashMap<String, InstallTaskSnapshot>>>,
+    tasks: Arc<RwLock<HashMap<String, InstallTaskSnapshot>>>,
+    cancellations: Arc<RwLock<HashMap<String, Arc<AtomicBool>>>>,
 }
 
 impl InstallTaskStore {
     pub fn get(&self, task_id: &str) -> Option<InstallTaskSnapshot> {
-        self.tasks.lock().ok()?.get(task_id).cloned()
+        self.tasks.read().ok()?.get(task_id).cloned()
     }
 
     pub fn active_task(&self) -> Option<InstallTaskSnapshot> {
         self.tasks
-            .lock()
+            .read()
             .ok()?
             .values()
             .find(|task| !matches!(task.stage, InstallStage::Completed))
@@ -70,10 +74,18 @@ impl InstallTaskStore {
             cancellation_requested: false,
             interrupted: false,
         };
-        self.tasks
-            .lock()
+        let mut tasks = self.tasks.write().expect("task store poisoned");
+        if tasks.contains_key(&task_id) {
+            return Err(failure(
+                InstallFailureCode::InstallerFailure,
+                "install task id already exists",
+            ));
+        }
+        tasks.insert(task_id.clone(), snapshot);
+        self.cancellations
+            .write()
             .expect("task store poisoned")
-            .insert(task_id.clone(), snapshot);
+            .insert(task_id.clone(), Arc::new(AtomicBool::new(false)));
         Ok(InstallPreparation {
             task_id,
             plan,
@@ -124,9 +136,24 @@ impl InstallTaskStore {
             InstallStage::Repairing
         };
         self.tasks
-            .lock()
+            .write()
             .expect("task store poisoned")
             .insert(task_id.clone(), task.clone());
+        let cancelled = self
+            .cancellations
+            .read()
+            .expect("task store poisoned")
+            .get(&task_id)
+            .cloned()
+            .ok_or_else(|| {
+                failure(
+                    InstallFailureCode::InstallerFailure,
+                    "task cancellation token missing",
+                )
+            })?;
+        if cancelled.load(Ordering::Acquire) {
+            return self.finish_cancelled(task_id, task);
+        }
         if !task.plan.actions.is_empty() {
             if let Err(error) = runtime.repair(&task.plan) {
                 task.result = Some(InstallTaskResult {
@@ -136,20 +163,27 @@ impl InstallTaskStore {
                 });
                 task.stage = InstallStage::Completed;
                 self.tasks
-                    .lock()
+                    .write()
                     .expect("task store poisoned")
                     .insert(task_id.clone(), task);
                 return Ok(task_id);
             }
         }
+        if cancelled.load(Ordering::Acquire) {
+            return self.finish_cancelled(task_id, task);
+        }
         task.stage = InstallStage::InstallingTools;
-        let results: Vec<_> = task
-            .request
-            .tools
-            .iter()
-            .copied()
-            .map(|tool| runtime.install_tool(tool))
-            .collect();
+        self.tasks
+            .write()
+            .expect("task store poisoned")
+            .insert(task_id.clone(), task.clone());
+        let mut results = Vec::new();
+        for tool in task.request.tools.iter().copied() {
+            if cancelled.load(Ordering::Acquire) {
+                return self.finish_cancelled(task_id, task);
+            }
+            results.push(runtime.install_tool(tool));
+        }
         task.stage = InstallStage::Verifying;
         let failed = results
             .iter()
@@ -165,7 +199,7 @@ impl InstallTaskStore {
         });
         task.stage = InstallStage::Completed;
         self.tasks
-            .lock()
+            .write()
             .expect("task store poisoned")
             .insert(task_id.clone(), task);
         Ok(task_id)
@@ -174,7 +208,7 @@ impl InstallTaskStore {
     pub fn cancel(&self, task_id: &str) -> Result<(), String> {
         let mut tasks = self
             .tasks
-            .lock()
+            .write()
             .map_err(|_| "task store unavailable".to_string())?;
         let task = tasks
             .get_mut(task_id)
@@ -188,13 +222,34 @@ impl InstallTaskStore {
             );
         }
         task.cancellation_requested = true;
+        if let Some(token) = self
+            .cancellations
+            .read()
+            .map_err(|_| "task store unavailable".to_string())?
+            .get(task_id)
+        {
+            token.store(true, Ordering::Release);
+        }
+        Ok(())
+    }
+
+    fn finish_cancelled(
+        &self,
+        task_id: String,
+        mut task: InstallTaskSnapshot,
+    ) -> Result<String, InstallFailure> {
+        task.cancellation_requested = true;
         task.stage = InstallStage::Completed;
         task.result = Some(InstallTaskResult {
             status: InstallTaskStatus::CancelledByUser,
             tools: Vec::new(),
             failure: None,
         });
-        Ok(())
+        self.tasks
+            .write()
+            .expect("task store poisoned")
+            .insert(task_id.clone(), task);
+        Ok(task_id)
     }
 }
 
@@ -212,9 +267,9 @@ impl OrchestratorRuntime for CommandRuntime {
         let node_version = node.as_deref().and_then(|path| command_version(path));
         let npm_version = npm.as_deref().and_then(|path| command_version(path));
         let platform = if cfg!(target_os = "windows") {
-            super::super::Platform::Windows
+            super::Platform::Windows
         } else if cfg!(target_os = "macos") {
-            super::super::Platform::Macos
+            super::Platform::Macos
         } else {
             return Err(failure(
                 InstallFailureCode::UnsupportedPlatform,
@@ -224,9 +279,9 @@ impl OrchestratorRuntime for CommandRuntime {
         Ok(EnvironmentSnapshot {
             platform,
             architecture: if cfg!(target_arch = "aarch64") {
-                super::super::Architecture::Arm64
+                super::Architecture::Arm64
             } else {
-                super::super::Architecture::X64
+                super::Architecture::X64
             },
             architecture_supported: true,
             node_version: node_version.clone(),
@@ -248,24 +303,145 @@ impl OrchestratorRuntime for CommandRuntime {
         })
     }
 
-    fn repair(&self, _plan: &RepairPlan) -> Result<(), InstallFailure> {
-        Err(failure(
-            InstallFailureCode::InstallerFailure,
-            "platform repair must be authorized by the native adapter",
-        ))
+    fn repair(&self, plan: &RepairPlan) -> Result<(), InstallFailure> {
+        use super::RepairActionKind;
+        if plan
+            .actions
+            .iter()
+            .all(|action| action.kind == RepairActionKind::RefreshEnvironment)
+        {
+            return match host_adapter() {
+                Some(adapter) => super::refresh_environment(adapter.as_ref()).map(|_| ()),
+                None => Err(failure(
+                    InstallFailureCode::UnsupportedPlatform,
+                    "native installer is limited to Windows and macOS",
+                )),
+            };
+        }
+        let Some(adapter) = host_adapter() else {
+            return Err(failure(
+                InstallFailureCode::UnsupportedPlatform,
+                "native installer is limited to Windows and macOS",
+            ));
+        };
+        let architecture = if cfg!(target_arch = "aarch64") {
+            super::Architecture::Arm64
+        } else {
+            super::Architecture::X64
+        };
+        let install = async {
+            let index = super::fetch_node_index().await?;
+            let release = super::resolve_node_release(
+                &index,
+                &super::node_policy(),
+                adapter.as_ref(),
+                architecture,
+            )?;
+            let temp =
+                std::env::temp_dir().join(format!("agent-manager-node-{}", std::process::id()));
+            super::install_node_release(adapter.as_ref(), &release, temp).await
+        };
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            tokio::task::block_in_place(|| handle.block_on(install))
+        } else {
+            tokio::runtime::Runtime::new()
+                .map_err(|error| failure(InstallFailureCode::InstallerFailure, &error.to_string()))?
+                .block_on(install)
+        }
     }
 
     fn install_tool(&self, tool: ToolId) -> ToolInstallResult {
-        ToolInstallResult {
-            tool,
-            status: ToolInstallStatus::Failed,
-            version: None,
-            path: None,
-            failure: Some(failure(
-                InstallFailureCode::ToolInstallFailure,
-                "tool installer is not available",
-            )),
+        let Some(strategy) = super::tool_strategy(tool) else {
+            return tool_failure(tool, "unsupported tool");
+        };
+        // Official installers without a Node dependency retain their npm
+        // fallback where one is declared; this avoids silently selecting an
+        // unrelated package for Hermes.
+        let package = strategy.npm_package.or(strategy.fallback_npm_package);
+        let output = match package {
+            Some(package) => std::process::Command::new("npm")
+                .args(["install", "--global", package])
+                .output(),
+            None if tool == ToolId::Hermes => {
+                if cfg!(target_os = "windows") {
+                    std::process::Command::new("powershell.exe")
+                        .args(["-NoProfile", "-Command", "irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1 | iex"])
+                        .output()
+                } else {
+                    std::process::Command::new("bash")
+                        .args(["-c", "tmp=$(mktemp) && curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh -o \"$tmp\" && bash \"$tmp\"; status=$?; rm -f \"$tmp\"; exit $status"])
+                        .output()
+                }
+            }
+            None => return tool_failure(tool, "no approved installer available"),
+        };
+        match output {
+            Ok(output) if output.status.success() => {
+                let path = resolve_host_command(
+                    strategy.command_name,
+                    &std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                        .collect::<Vec<_>>(),
+                );
+                let version = path.as_deref().and_then(command_version);
+                match version {
+                    Some(version) => ToolInstallResult {
+                        tool,
+                        status: ToolInstallStatus::Succeeded,
+                        version: Some(version),
+                        path: path.map(|path| path.display().to_string()),
+                        failure: None,
+                    },
+                    None => ToolInstallResult {
+                        tool,
+                        status: ToolInstallStatus::InstalledNotRunnable,
+                        version: None,
+                        path: path.map(|path| path.display().to_string()),
+                        failure: Some(failure(
+                            InstallFailureCode::VerificationFailure,
+                            "installed command did not return a version",
+                        )),
+                    },
+                }
+            }
+            Ok(output) => ToolInstallResult {
+                tool,
+                status: ToolInstallStatus::Failed,
+                version: None,
+                path: None,
+                failure: Some(super::classify_process_failure(
+                    InstallStage::InstallingTools,
+                    output.status.code(),
+                    &String::from_utf8_lossy(&output.stdout),
+                    &String::from_utf8_lossy(&output.stderr),
+                )),
+            },
+            Err(error) => tool_failure(tool, &error.to_string()),
         }
+    }
+}
+
+fn host_adapter() -> Option<Box<dyn super::PlatformAdapter>> {
+    #[cfg(target_os = "windows")]
+    {
+        Some(Box::new(super::platform::windows::WindowsAdapter))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Some(Box::new(super::platform::macos::MacosAdapter))
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        None
+    }
+}
+
+fn tool_failure(tool: ToolId, detail: &str) -> ToolInstallResult {
+    ToolInstallResult {
+        tool,
+        status: ToolInstallStatus::Failed,
+        version: None,
+        path: None,
+        failure: Some(failure(InstallFailureCode::ToolInstallFailure, detail)),
     }
 }
 
