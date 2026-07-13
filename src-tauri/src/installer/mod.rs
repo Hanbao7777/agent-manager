@@ -114,27 +114,28 @@ pub fn get_install_task(
         .ok_or_else(|| "unknown install task".to_string())
 }
 
+/// Frontend listeners call this after subscribing to installation events so
+/// recovered terminal state cannot be lost during Tauri application setup.
+#[tauri::command]
+pub fn replay_startup_install_recovery(
+    store: tauri::State<'_, InstallTaskStore>,
+    app: tauri::AppHandle,
+) -> usize {
+    let events = store.take_startup_recovery_events();
+    let count = events.len();
+    for event in events {
+        let _ = app.emit("agent-manager://install-task", event);
+    }
+    count
+}
+
 #[tauri::command]
 pub fn cancel_install_task(
     task_id: String,
     store: tauri::State<'_, InstallTaskStore>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    store.cancel(&task_id)?;
-    if let Some(task) = store.get(&task_id) {
-        if let Some(result) = task.result {
-            let _ = app.emit(
-                "agent-manager://install-task",
-                InstallTaskEvent::StageChanged {
-                    task_id: task_id.clone(),
-                    stage: InstallStage::Completed,
-                },
-            );
-            let _ = app.emit(
-                "agent-manager://install-task",
-                InstallTaskEvent::Finished { task_id, result },
-            );
-        }
-    }
-    Ok(())
+    store.cancel_with_events(&task_id, |event| {
+        let _ = app.emit("agent-manager://install-task", event);
+    })
 }

@@ -119,6 +119,7 @@ pub fn run() {
             installer::prepare_tool_install,
             installer::start_tool_install,
             installer::get_install_task,
+            installer::replay_startup_install_recovery,
             installer::cancel_install_task,
         ]);
 

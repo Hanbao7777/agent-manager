@@ -31,6 +31,7 @@ pub struct InstallTaskStore {
     tasks: Arc<RwLock<HashMap<String, InstallTaskSnapshot>>>,
     cancellations: Arc<RwLock<HashMap<String, Arc<AtomicBool>>>>,
     claims: Arc<RwLock<HashSet<String>>>,
+    startup_recovery_events: Arc<RwLock<Vec<super::InstallTaskEvent>>>,
     persistence_path: Option<Arc<PathBuf>>,
 }
 
@@ -40,6 +41,7 @@ impl Default for InstallTaskStore {
             tasks: Arc::default(),
             cancellations: Arc::default(),
             claims: Arc::default(),
+            startup_recovery_events: Arc::default(),
             persistence_path: None,
         }
     }
@@ -48,6 +50,7 @@ impl Default for InstallTaskStore {
 impl InstallTaskStore {
     pub fn with_persistence(config_dir: PathBuf) -> Self {
         let path = config_dir.join("install-tasks.json");
+        let mut startup_recovery_events = Vec::new();
         let tasks = std::fs::read(&path)
             .ok()
             .and_then(|data| serde_json::from_slice::<Vec<InstallTaskSnapshot>>(&data).ok())
@@ -68,6 +71,7 @@ impl InstallTaskStore {
                             "installation was interrupted; run preflight again",
                         )),
                     });
+                    startup_recovery_events.extend(terminal_events(&task));
                 }
                 (task.task_id.clone(), task)
             })
@@ -76,6 +80,7 @@ impl InstallTaskStore {
             tasks: Arc::new(RwLock::new(tasks)),
             cancellations: Arc::default(),
             claims: Arc::default(),
+            startup_recovery_events: Arc::new(RwLock::new(startup_recovery_events)),
             persistence_path: Some(Arc::new(path)),
         };
         store.persist();
@@ -109,6 +114,15 @@ impl InstallTaskStore {
             .values()
             .find(|task| !matches!(task.stage, InstallStage::Completed))
             .cloned()
+    }
+
+    /// Returns terminal events for work interrupted before this application
+    /// instance started. Draining prevents duplicate startup notifications.
+    pub fn take_startup_recovery_events(&self) -> Vec<super::InstallTaskEvent> {
+        self.startup_recovery_events
+            .write()
+            .map(|mut events| std::mem::take(&mut *events))
+            .unwrap_or_default()
     }
 
     pub fn prepare<R: OrchestratorRuntime>(
@@ -182,6 +196,7 @@ impl InstallTaskStore {
         let task = self
             .get(&task_id)
             .ok_or_else(|| failure(InstallFailureCode::InstallerFailure, "unknown task"))?;
+        validate_confirmed_request(&task, &confirmed.request)?;
         if !matches!(
             task.stage,
             InstallStage::Preflight | InstallStage::AwaitingConfirmation
@@ -257,6 +272,10 @@ impl InstallTaskStore {
         let mut task = self
             .get(&task_id)
             .ok_or_else(|| failure(InstallFailureCode::InstallerFailure, "unknown task"))?;
+        validate_confirmed_request(&task, &confirmed.request)?;
+        if is_terminal_cancellation(&task) {
+            return Ok(task_id);
+        }
         let required: Vec<_> = task
             .plan
             .actions
@@ -294,6 +313,9 @@ impl InstallTaskStore {
             let current = tasks
                 .get(&task_id)
                 .ok_or_else(|| failure(InstallFailureCode::InstallerFailure, "unknown task"))?;
+            if is_terminal_cancellation(current) {
+                return Ok(task_id);
+            }
             if !matches!(
                 current.stage,
                 InstallStage::Preflight | InstallStage::AwaitingConfirmation
@@ -323,6 +345,9 @@ impl InstallTaskStore {
                 )
             })?;
         if cancelled.load(Ordering::Acquire) {
+            if self.has_terminal_cancellation(&task_id) {
+                return Ok(task_id);
+            }
             let task_id = self.finish_cancelled(task_id, task)?;
             self.emit_terminal(&task_id, &mut emit);
             return Ok(task_id);
@@ -345,6 +370,9 @@ impl InstallTaskStore {
             }
         }
         if cancelled.load(Ordering::Acquire) {
+            if self.has_terminal_cancellation(&task_id) {
+                return Ok(task_id);
+            }
             let task_id = self.finish_cancelled(task_id, task)?;
             self.emit_terminal(&task_id, &mut emit);
             return Ok(task_id);
@@ -364,16 +392,35 @@ impl InstallTaskStore {
         let mut results = Vec::new();
         for tool in task.request.tools.iter().copied() {
             if cancelled.load(Ordering::Acquire) {
+                if self.has_terminal_cancellation(&task_id) {
+                    return Ok(task_id);
+                }
                 let task_id = self.finish_cancelled(task_id, task)?;
                 self.emit_terminal(&task_id, &mut emit);
                 return Ok(task_id);
             }
             let result = runtime.install_tool(tool);
+            if cancelled.load(Ordering::Acquire) {
+                if self.has_terminal_cancellation(&task_id) {
+                    return Ok(task_id);
+                }
+                let task_id = self.finish_cancelled(task_id, task)?;
+                self.emit_terminal(&task_id, &mut emit);
+                return Ok(task_id);
+            }
             emit(super::InstallTaskEvent::ToolFinished {
                 task_id: task_id.clone(),
                 result: result.clone(),
             });
             results.push(result);
+            if cancelled.load(Ordering::Acquire) {
+                if self.has_terminal_cancellation(&task_id) {
+                    return Ok(task_id);
+                }
+                let task_id = self.finish_cancelled(task_id, task)?;
+                self.emit_terminal(&task_id, &mut emit);
+                return Ok(task_id);
+            }
         }
         task.stage = InstallStage::Verifying;
         self.tasks
@@ -385,6 +432,14 @@ impl InstallTaskStore {
             task_id: task_id.clone(),
             stage: InstallStage::Verifying,
         });
+        if cancelled.load(Ordering::Acquire) {
+            if self.has_terminal_cancellation(&task_id) {
+                return Ok(task_id);
+            }
+            let task_id = self.finish_cancelled(task_id, task)?;
+            self.emit_terminal(&task_id, &mut emit);
+            return Ok(task_id);
+        }
         let failed = results
             .iter()
             .any(|result| result.status != ToolInstallStatus::Succeeded);
@@ -424,17 +479,12 @@ impl InstallTaskStore {
             );
         }
         task.cancellation_requested = true;
-        if matches!(
-            task.stage,
-            InstallStage::Preflight | InstallStage::AwaitingConfirmation
-        ) {
-            task.stage = InstallStage::Completed;
-            task.result = Some(InstallTaskResult {
-                status: InstallTaskStatus::CancelledByUser,
-                tools: Vec::new(),
-                failure: None,
-            });
-        }
+        task.stage = InstallStage::Completed;
+        task.result = Some(InstallTaskResult {
+            status: InstallTaskStatus::CancelledByUser,
+            tools: Vec::new(),
+            failure: None,
+        });
         if let Some(token) = self
             .cancellations
             .read()
@@ -445,6 +495,16 @@ impl InstallTaskStore {
         }
         drop(tasks);
         self.persist();
+        Ok(())
+    }
+
+    pub fn cancel_with_events<F: FnMut(super::InstallTaskEvent)>(
+        &self,
+        task_id: &str,
+        mut emit: F,
+    ) -> Result<(), String> {
+        self.cancel(task_id)?;
+        self.emit_terminal(task_id, &mut emit);
         Ok(())
     }
 
@@ -468,20 +528,58 @@ impl InstallTaskStore {
         Ok(task_id)
     }
 
+    fn has_terminal_cancellation(&self, task_id: &str) -> bool {
+        self.get(task_id)
+            .as_ref()
+            .is_some_and(is_terminal_cancellation)
+    }
+
     fn emit_terminal<F: FnMut(super::InstallTaskEvent)>(&self, task_id: &str, emit: &mut F) {
         let Some(task) = self.get(task_id) else {
             return;
         };
-        let Some(result) = task.result else { return };
-        emit(super::InstallTaskEvent::StageChanged {
-            task_id: task_id.into(),
-            stage: InstallStage::Completed,
-        });
-        emit(super::InstallTaskEvent::Finished {
-            task_id: task_id.into(),
-            result,
-        });
+        for event in terminal_events(&task) {
+            emit(event);
+        }
     }
+}
+
+fn validate_confirmed_request(
+    task: &InstallTaskSnapshot,
+    request: &InstallRequest,
+) -> Result<(), InstallFailure> {
+    if task.request != *request {
+        return Err(failure(
+            InstallFailureCode::PrivilegeDeclined,
+            "confirmed request does not match the prepared task",
+        ));
+    }
+    Ok(())
+}
+
+fn is_terminal_cancellation(task: &InstallTaskSnapshot) -> bool {
+    task.cancellation_requested
+        && task.stage == InstallStage::Completed
+        && matches!(
+            task.result.as_ref().map(|result| &result.status),
+            Some(InstallTaskStatus::CancelledByUser)
+        )
+}
+
+fn terminal_events(task: &InstallTaskSnapshot) -> Vec<super::InstallTaskEvent> {
+    let Some(result) = task.result.clone() else {
+        return Vec::new();
+    };
+    vec![
+        super::InstallTaskEvent::StageChanged {
+            task_id: task.task_id.clone(),
+            stage: InstallStage::Completed,
+        },
+        super::InstallTaskEvent::Finished {
+            task_id: task.task_id.clone(),
+            result,
+        },
+    ]
 }
 
 /// Host runtime used by the command facade. Actual privileged repair remains
@@ -838,6 +936,43 @@ mod tests {
             InstallFailureCode::PrivilegeDeclined
         );
     }
+
+    #[test]
+    fn confirmed_request_must_match_the_prepared_task() {
+        let store = InstallTaskStore::default();
+        let prepared = InstallRequest {
+            task_id: Some("bound-request".into()),
+            tools: vec![ToolId::Codex],
+            action: super::super::InstallAction::Install,
+        };
+        let preparation = store.prepare(prepared.clone(), &Fake).unwrap();
+        let substituted = InstallRequest {
+            tools: vec![ToolId::Claude],
+            action: super::super::InstallAction::Update,
+            ..prepared
+        };
+        let confirmed = ConfirmedInstallRequest {
+            request: substituted,
+            confirmed_action_ids: preparation
+                .plan
+                .actions
+                .iter()
+                .map(|action| action.id.clone())
+                .collect(),
+        };
+
+        assert_eq!(
+            store.claim_start(&confirmed).unwrap_err().code,
+            InstallFailureCode::PrivilegeDeclined
+        );
+        assert_eq!(
+            store
+                .start_with_events(confirmed, &Fake, |_| {})
+                .unwrap_err()
+                .code,
+            InstallFailureCode::PrivilegeDeclined
+        );
+    }
     #[test]
     fn confirmed_batch_repairs_once_and_finishes() {
         let store = InstallTaskStore::default();
@@ -865,6 +1000,217 @@ mod tests {
             store.get("task").unwrap().result.unwrap().status,
             InstallTaskStatus::Succeeded
         );
+    }
+
+    #[test]
+    fn successful_install_emits_the_exact_transition_sequence() {
+        let store = InstallTaskStore::default();
+        let request = InstallRequest {
+            task_id: Some("events".into()),
+            tools: vec![ToolId::Codex],
+            action: super::super::InstallAction::Install,
+        };
+        let preparation = store.prepare(request.clone(), &Fake).unwrap();
+        let mut events = Vec::new();
+
+        store
+            .start_with_events(
+                ConfirmedInstallRequest {
+                    request,
+                    confirmed_action_ids: preparation
+                        .plan
+                        .actions
+                        .iter()
+                        .map(|action| action.id.clone())
+                        .collect(),
+                },
+                &Fake,
+                |event| events.push(event),
+            )
+            .unwrap();
+
+        assert!(matches!(
+            events.as_slice(),
+            [
+                super::super::InstallTaskEvent::StageChanged {
+                    stage: InstallStage::Repairing,
+                    ..
+                },
+                super::super::InstallTaskEvent::StageChanged {
+                    stage: InstallStage::InstallingTools,
+                    ..
+                },
+                super::super::InstallTaskEvent::ToolFinished { .. },
+                super::super::InstallTaskEvent::StageChanged {
+                    stage: InstallStage::Verifying,
+                    ..
+                },
+                super::super::InstallTaskEvent::StageChanged {
+                    stage: InstallStage::Completed,
+                    ..
+                },
+                super::super::InstallTaskEvent::Finished {
+                    result: InstallTaskResult {
+                        status: InstallTaskStatus::Succeeded,
+                        ..
+                    },
+                    ..
+                }
+            ]
+        ));
+    }
+
+    #[test]
+    fn startup_recovery_emits_completed_then_interrupted_result() {
+        let root =
+            std::env::temp_dir().join(format!("installer-startup-events-{}", std::process::id()));
+        let store = InstallTaskStore::with_persistence(root.clone());
+        let request = InstallRequest {
+            task_id: Some("persisted-events".into()),
+            tools: vec![ToolId::Codex],
+            action: super::super::InstallAction::Install,
+        };
+        store.prepare(request, &Fake).unwrap();
+        drop(store);
+
+        let restored = InstallTaskStore::with_persistence(root.clone());
+        let events = restored.take_startup_recovery_events();
+
+        assert!(matches!(
+            events.as_slice(),
+            [
+                super::super::InstallTaskEvent::StageChanged {
+                    task_id,
+                    stage: InstallStage::Completed,
+                },
+                super::super::InstallTaskEvent::Finished {
+                    task_id: finished_task_id,
+                    result: InstallTaskResult {
+                        status: InstallTaskStatus::NeedsUserAction,
+                        ..
+                    },
+                }
+            ] if task_id == "persisted-events" && finished_task_id == "persisted-events"
+        ));
+        assert!(restored.take_startup_recovery_events().is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cancellation_before_the_worker_starts_emits_one_terminal_sequence() {
+        let store = InstallTaskStore::default();
+        let request = InstallRequest {
+            task_id: Some("cancelled".into()),
+            tools: vec![ToolId::Codex],
+            action: super::super::InstallAction::Install,
+        };
+        let preparation = store.prepare(request.clone(), &Fake).unwrap();
+        let confirmed = ConfirmedInstallRequest {
+            request,
+            confirmed_action_ids: preparation
+                .plan
+                .actions
+                .iter()
+                .map(|action| action.id.clone())
+                .collect(),
+        };
+        store.claim_start(&confirmed).unwrap();
+        let mut cancellation_events = Vec::new();
+
+        store
+            .cancel_with_events("cancelled", |event| cancellation_events.push(event))
+            .unwrap();
+        let mut worker_events = Vec::new();
+        store
+            .start_with_events(confirmed, &Fake, |event| worker_events.push(event))
+            .unwrap();
+
+        assert!(matches!(
+            cancellation_events.as_slice(),
+            [
+                super::super::InstallTaskEvent::StageChanged {
+                    task_id,
+                    stage: InstallStage::Completed,
+                },
+                super::super::InstallTaskEvent::Finished {
+                    task_id: finished_task_id,
+                    result: InstallTaskResult {
+                        status: InstallTaskStatus::CancelledByUser,
+                        ..
+                    },
+                }
+            ] if task_id == "cancelled" && finished_task_id == "cancelled"
+        ));
+        assert!(worker_events.is_empty());
+    }
+
+    #[test]
+    fn cancellation_after_the_last_tool_skips_verification() {
+        struct CancellingFake {
+            store: InstallTaskStore,
+        }
+
+        impl OrchestratorRuntime for CancellingFake {
+            fn snapshot(&self) -> Result<EnvironmentSnapshot, InstallFailure> {
+                Fake.snapshot()
+            }
+
+            fn repair(&self, plan: &RepairPlan) -> Result<(), InstallFailure> {
+                Fake.repair(plan)
+            }
+
+            fn install_tool(&self, tool: ToolId) -> ToolInstallResult {
+                self.store.cancel("cancel-during-tool").unwrap();
+                let task = self.store.get("cancel-during-tool").unwrap();
+                assert_eq!(task.stage, InstallStage::Completed);
+                assert_eq!(
+                    task.result.unwrap().status,
+                    InstallTaskStatus::CancelledByUser
+                );
+                Fake.install_tool(tool)
+            }
+        }
+
+        let store = InstallTaskStore::default();
+        let request = InstallRequest {
+            task_id: Some("cancel-during-tool".into()),
+            tools: vec![ToolId::Codex],
+            action: super::super::InstallAction::Install,
+        };
+        let preparation = store.prepare(request.clone(), &Fake).unwrap();
+        let mut events = Vec::new();
+
+        store
+            .start_with_events(
+                ConfirmedInstallRequest {
+                    request,
+                    confirmed_action_ids: preparation
+                        .plan
+                        .actions
+                        .iter()
+                        .map(|action| action.id.clone())
+                        .collect(),
+                },
+                &CancellingFake {
+                    store: store.clone(),
+                },
+                |event| events.push(event),
+            )
+            .unwrap();
+
+        assert!(matches!(
+            events.as_slice(),
+            [
+                super::super::InstallTaskEvent::StageChanged {
+                    stage: InstallStage::Repairing,
+                    ..
+                },
+                super::super::InstallTaskEvent::StageChanged {
+                    stage: InstallStage::InstallingTools,
+                    ..
+                },
+            ]
+        ));
     }
 
     #[test]
