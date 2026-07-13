@@ -479,12 +479,6 @@ impl InstallTaskStore {
             );
         }
         task.cancellation_requested = true;
-        task.stage = InstallStage::Completed;
-        task.result = Some(InstallTaskResult {
-            status: InstallTaskStatus::CancelledByUser,
-            tools: Vec::new(),
-            failure: None,
-        });
         if let Some(token) = self
             .cancellations
             .read()
@@ -492,6 +486,18 @@ impl InstallTaskStore {
             .get(task_id)
         {
             token.store(true, Ordering::Release);
+        }
+        let safe_to_finish = matches!(
+            task.stage,
+            InstallStage::Preflight | InstallStage::AwaitingConfirmation
+        );
+        if safe_to_finish {
+            task.stage = InstallStage::Completed;
+            task.result = Some(InstallTaskResult {
+                status: InstallTaskStatus::CancelledByUser,
+                tools: Vec::new(),
+                failure: None,
+            });
         }
         drop(tasks);
         self.persist();
@@ -504,7 +510,9 @@ impl InstallTaskStore {
         mut emit: F,
     ) -> Result<(), String> {
         self.cancel(task_id)?;
-        self.emit_terminal(task_id, &mut emit);
+        if self.has_terminal_cancellation(task_id) {
+            self.emit_terminal(task_id, &mut emit);
+        }
         Ok(())
     }
 
@@ -1165,11 +1173,9 @@ mod tests {
             fn install_tool(&self, tool: ToolId) -> ToolInstallResult {
                 self.store.cancel("cancel-during-tool").unwrap();
                 let task = self.store.get("cancel-during-tool").unwrap();
-                assert_eq!(task.stage, InstallStage::Completed);
-                assert_eq!(
-                    task.result.unwrap().status,
-                    InstallTaskStatus::CancelledByUser
-                );
+                assert_eq!(task.stage, InstallStage::InstallingTools);
+                assert!(task.cancellation_requested);
+                assert!(task.result.is_none());
                 Fake.install_tool(tool)
             }
         }
@@ -1210,6 +1216,17 @@ mod tests {
                 },
                 super::super::InstallTaskEvent::StageChanged {
                     stage: InstallStage::InstallingTools,
+                    ..
+                },
+                super::super::InstallTaskEvent::StageChanged {
+                    stage: InstallStage::Completed,
+                    ..
+                },
+                super::super::InstallTaskEvent::Finished {
+                    result: InstallTaskResult {
+                        status: InstallTaskStatus::CancelledByUser,
+                        ..
+                    },
                     ..
                 },
             ]

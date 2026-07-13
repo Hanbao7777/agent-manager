@@ -95,6 +95,28 @@ describe("ToolInstallDialog", () => {
     expect(onConfirm).toHaveBeenCalledWith(["install-node"]);
   });
 
+  it("hides on Escape without cancelling, while the explicit button cancels", () => {
+    const onClose = vi.fn();
+    const onCancel = vi.fn();
+    render(
+      <ToolInstallDialog
+        open
+        preparation={preparation}
+        task={null}
+        toolName={(tool) => tool}
+        onConfirm={vi.fn()}
+        onClose={onClose}
+        onCancel={onCancel}
+      />,
+    );
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onCancel).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "common.cancel" }));
+    expect(onCancel).toHaveBeenCalledOnce();
+  });
+
   it("shows successful and failed tools in one batch result", () => {
     const onRetry = vi.fn();
 

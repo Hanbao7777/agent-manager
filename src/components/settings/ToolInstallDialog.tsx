@@ -111,7 +111,7 @@ export function ToolInstallDialog({
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        if (!next) (onClose ?? onCancel)();
+        if (!next) onClose?.();
       }}
     >
       <DialogContent className="max-w-md" zIndex="alert">

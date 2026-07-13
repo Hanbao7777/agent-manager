@@ -16,7 +16,7 @@ Tasks:
 - Task 5: complete recovery (base `0248844c`, ledger `c65f4586`, secure-adapter corrections `1569ef50`); prior dispatch `task_e8174f0aafbb` ended in three premature worker terminations, then this revalidation added adapter-boundary coverage for LTS assets, integrity ordering, cleanup, signature/authorization failures, and PATH parsing.
 - Task 6: accepted DONE_WITH_CONCERNS at `f8dcc04d`; `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` passed, while focused Rust tests/check are blocked by unavailable MSVC `link.exe`.
 - Task 7: complete and accepted at `acddaffe`; Luna found no Gate 1 or Gate 2 blocker, and all six overall statuses plus the typed installer API, reusable dialog behaviors, contracts, and locale coverage passed review.
-- Task 8: implementation complete; coordinator Gate 1 and Gate 2 remain pending. Native installs use the persisted installer task flow while updates and WSL remain on the legacy executor.
+- Task 8: correction complete; coordinator Gate 1 and Gate 2 remain pending. Native installs use the persisted installer task flow while updates and WSL remain on the legacy executor.
 - Task 9: pending
 
 Verification notes:

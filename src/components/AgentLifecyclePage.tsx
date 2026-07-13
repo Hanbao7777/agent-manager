@@ -247,6 +247,7 @@ export function AgentLifecyclePage() {
   }>({ visible: false, preparation: null, task: null, tools: [] });
   const unlistenInstallEvents = useRef<(() => void) | null>(null);
   const unlistenExitBlocked = useRef<(() => void) | null>(null);
+  const activeInstallTaskId = useRef<string | null>(null);
 
   const toolVersionByName = useMemo(() => {
     return new Map(toolVersions.map((tool) => [tool.name, tool]));
@@ -413,59 +414,89 @@ export function AgentLifecyclePage() {
     let disposed = false;
     void (async () => {
       try {
-        unlistenInstallEvents.current = await installerApi.listenAll(
-          async (event) => {
-            try {
-              const snapshot = await installerApi.getTask(event.task_id);
+        const unlistenInstall = await installerApi.listenAll(async (event) => {
+          try {
+            if (
+              activeInstallTaskId.current &&
+              activeInstallTaskId.current !== event.task_id
+            ) {
+              return;
+            }
+            const snapshot = await installerApi.getTask(event.task_id);
+            if (disposed) return;
+            activeInstallTaskId.current = snapshot.task_id;
+            setInstallFlow({
+              visible: true,
+              preparation: null,
+              task: snapshot,
+              tools: snapshot.request.tools as ToolName[],
+            });
+            if (event.type === "finished") {
+              const reportedTools = event.result.tools.map(
+                (tool) => tool.tool as ToolName,
+              );
+              await refreshToolVersions(reportedTools);
               if (disposed) return;
-              setInstallFlow({
-                visible: true,
-                preparation: null,
-                task: snapshot,
-                tools: snapshot.request.tools as ToolName[],
-              });
-              if (event.type === "finished") {
-                const reportedTools = event.result.tools.map(
-                  (tool) => tool.tool as ToolName,
+              const toastOptions = { closeButton: true };
+              if (event.result.status === "succeeded") {
+                toast.success(
+                  t("settings.installer.resultStatus.succeeded"),
+                  toastOptions,
                 );
-                await refreshToolVersions(reportedTools);
-                if (disposed) return;
-                if (
-                  event.result.status === "succeeded_with_conflicts" ||
-                  event.result.tools.some(
-                    (tool) => tool.status === "installed_not_runnable",
-                  )
-                ) {
-                  for (const tool of reportedTools) {
-                    void diagnoseToolSilently(tool);
-                  }
+              } else if (
+                event.result.status === "succeeded_with_conflicts" ||
+                event.result.status === "installed_not_runnable" ||
+                event.result.status === "needs_user_action"
+              ) {
+                toast.warning(
+                  t(`settings.installer.resultStatus.${event.result.status}`),
+                  toastOptions,
+                );
+              } else {
+                toast.error(
+                  t(`settings.installer.resultStatus.${event.result.status}`),
+                  toastOptions,
+                );
+              }
+              if (
+                event.result.status === "succeeded_with_conflicts" ||
+                event.result.status === "needs_user_action" ||
+                event.result.tools.some(
+                  (tool) => tool.status === "installed_not_runnable",
+                )
+              ) {
+                for (const tool of reportedTools) {
+                  void diagnoseToolSilently(tool);
                 }
               }
-            } catch (error) {
-              console.error(
-                "[AboutSection] Failed to apply installer event",
-                error,
-              );
-              if (!disposed) {
-                toast.error(t("settings.installer.failed"), {
-                  description: extractErrorMessage(error) || undefined,
-                  closeButton: true,
-                });
-              }
             }
-          },
-        );
-        unlistenExitBlocked.current = await installerApi.listenExitBlocked(
-          () => {
-            if (disposed) return;
-            setInstallFlow((flow) => ({ ...flow, visible: true }));
-            toast.warning(t("settings.installer.exitBlocked"), {
-              closeButton: true,
-            });
-          },
-        );
+          } catch (error) {
+            console.error(
+              "[AboutSection] Failed to apply installer event",
+              error,
+            );
+            if (!disposed) {
+              toast.error(t("settings.installer.failed"), {
+                description: extractErrorMessage(error) || undefined,
+                closeButton: true,
+              });
+            }
+          }
+        });
+        if (disposed) unlistenInstall();
+        else unlistenInstallEvents.current = unlistenInstall;
+        const unlistenExit = await installerApi.listenExitBlocked(() => {
+          if (disposed) return;
+          setInstallFlow((flow) => ({ ...flow, visible: true }));
+          toast.warning(t("settings.installer.exitBlocked"), {
+            closeButton: true,
+          });
+        });
+        if (disposed) unlistenExit();
+        else unlistenExitBlocked.current = unlistenExit;
         const active = await installerApi.getActiveTask();
         if (active && !disposed) {
+          activeInstallTaskId.current = active.task_id;
           setInstallFlow({
             visible: true,
             preparation: null,
@@ -490,6 +521,7 @@ export function AgentLifecyclePage() {
       unlistenInstallEvents.current = null;
       unlistenExitBlocked.current?.();
       unlistenExitBlocked.current = null;
+      activeInstallTaskId.current = null;
     };
   }, [diagnoseToolSilently, refreshToolVersions, t]);
 
@@ -741,6 +773,7 @@ export function AgentLifecyclePage() {
               task: null,
               tools: toolNames,
             });
+            activeInstallTaskId.current = preparation.task_id;
             if (!preparation.requires_confirmation) {
               await installerApi.start({
                 request: {
