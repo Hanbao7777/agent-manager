@@ -80,4 +80,26 @@ describe("installerApi", () => {
     expect(handler).toHaveBeenCalledWith(matchingEvent);
     expect(returnedUnlisten).toBe(unlisten);
   });
+
+  it("does not replay recovery before Tauri listener registration resolves", async () => {
+    let resolveListen: () => void;
+    const listenRegistration = new Promise<void>((resolve) => {
+      resolveListen = resolve;
+    });
+    tauri.listen.mockReturnValue(listenRegistration);
+
+    const registration = installerApi.listen("install-1", vi.fn());
+
+    expect(tauri.invoke).not.toHaveBeenCalledWith(
+      "replay_startup_install_recovery",
+    );
+
+    resolveListen!();
+    await registration;
+    await installerApi.replayStartupRecovery();
+
+    expect(tauri.invoke).toHaveBeenCalledWith(
+      "replay_startup_install_recovery",
+    );
+  });
 });

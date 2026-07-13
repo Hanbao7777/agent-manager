@@ -14,8 +14,8 @@ Tasks:
 - Task 3: complete (commit `970faaf1`, passed spec and quality review)
 - Task 4: complete recovery (`task_d8843c61c323`; commits `19a67d49`, `3bbce1bb`, and `7991c6f5`; review ledger follows in this commit)
 - Task 5: complete recovery (base `0248844c`, ledger `c65f4586`, secure-adapter corrections `1569ef50`); prior dispatch `task_e8174f0aafbb` ended in three premature worker terminations, then this revalidation added adapter-boundary coverage for LTS assets, integrity ordering, cleanup, signature/authorization failures, and PATH parsing.
-- Task 6: implemented and under final review (commits `4418442d`, `7525081c`, `bdce98d1`, `6e7df1dc`, `b9ba685a`, `a785bb2f`, `fd77cedb`, `202ca9a9`, and `f8dcc04d`); task persistence marks interrupted work for a new preflight and never resumes privileged work, while native installs run in a background worker with corrected scheduling, transition events, validated Node/npm pairing, recovery, and Hermes failure handling.
-- Task 7: complete after recovery (implementation `4a3489c0`, state hardening `8b114bc3`, and follow-up corrections through `658cf40f`); the typed installer API now has command-envelope and task-scoped event regression coverage, while the localized reusable dialog covers confirmation reset, failure details, diagnostics, and retry behavior.
+- Task 6: accepted DONE_WITH_CONCERNS at `f8dcc04d`; `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` is blocked because `rustfmt` is unavailable, and focused Rust tests/check are blocked by unavailable MSVC `link.exe`.
+- Task 7: implementation complete (implementation `4a3489c0`, state hardening `8b114bc3`, and follow-up corrections through `658cf40f`); the typed installer API and localized reusable dialog are awaiting coordinator Gate 1 and Gate 2 acceptance.
 - Task 8: pending
 - Task 9: pending
 
@@ -26,7 +26,7 @@ Verification notes:
 - Task 3: formatter, diff, and scope checks passed. Focused probe, repair, and legacy misc test attempts are blocked before project compilation by the same missing MSVC linker.
 - Task 4: `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`, `git diff --check`, and `git show --check` passed. Focused verifier tests remain blocked before project compilation because MSVC `link.exe` is unavailable.
 - Task 5 recovery: `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`, `git diff --check`, and `git show --check 1569ef50` passed. Platform tests and `cargo check` are blocked before project compilation because local MSVC `link.exe` is unavailable.
-- Task 6: `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` and `git diff --check` pass. Focused Rust tests remain blocked before project compilation because `link.exe` is unavailable.
+- Task 6: `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` is blocked because `rustfmt` is unavailable, and focused Rust tests/check remain blocked before project compilation because `link.exe` is unavailable.
 
 Coordination notes:
 - Task 2 completion required manual Orca lifecycle recovery because valid `worker_done` messages came from the original pane under a stale sender handle while the dispatch remained `dispatched`.
