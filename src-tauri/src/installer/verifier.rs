@@ -156,14 +156,7 @@ pub fn verify_tool_detailed<R: ToolRunner>(
             }
         }
     };
-    if !strategy.dependencies.is_empty()
-        && (dependencies.node.len() != 1
-            || dependencies.npm.len() != 1
-            || dependencies.selected.is_none()
-            || dependencies.selected.as_ref().is_some_and(|pair| {
-                pair.node != dependencies.node[0] || pair.npm != dependencies.npm[0]
-            }))
-    {
+    if !strategy.dependencies.is_empty() && dependencies.selected.is_none() {
         return verification_failure(
             runner,
             strategy,
@@ -171,7 +164,15 @@ pub fn verify_tool_detailed<R: ToolRunner>(
             failure("ambiguous Node/npm installations", None),
         );
     }
-    let environment = environment.with_dependency_paths(&dependencies.node, &dependencies.npm);
+    let selected_node = dependencies
+        .selected_pair()
+        .map(|pair| vec![pair.node.clone()])
+        .unwrap_or_default();
+    let selected_npm = dependencies
+        .selected_pair()
+        .map(|pair| vec![pair.npm.clone()])
+        .unwrap_or_default();
+    let environment = environment.with_dependency_paths(&selected_node, &selected_npm);
     let candidates = match runner.resolve_command(strategy.command_name, &environment) {
         Ok(candidates) => candidates,
         Err(error) => {
@@ -597,6 +598,78 @@ mod tests {
             fake.observed.lock().unwrap()[0].1,
             vec!["resolve_dependencies".to_string()]
         );
+    }
+
+    #[test]
+    fn selected_dependency_pair_avoids_ambiguous_candidates_and_paths() {
+        let mut fake = fake(&["C:/tool"], Ok(ToolCommandOutput::success("1.2.3")));
+        fake.dependencies = Some(
+            DependencyCandidates::new(
+                vec!["C:/selected/node/node".into(), "C:/other/node/node".into()],
+                vec!["C:/selected/npm/npm".into(), "C:/other/npm/npm".into()],
+                Some(ResolvedNodeNpmPair {
+                    node: "C:/selected/node/node".into(),
+                    npm: "C:/selected/npm/npm".into(),
+                    source: "test",
+                }),
+            )
+            .unwrap(),
+        );
+
+        let verification = verify_tool_detailed(&fake, tool_strategy(ToolId::Codex).unwrap(), None);
+        assert_eq!(verification.result.status, ToolInstallStatus::Succeeded);
+        assert_eq!(
+            verification.clean_environment.path_entries,
+            vec![
+                PathBuf::from("C:/selected/node"),
+                PathBuf::from("C:/selected/npm"),
+                PathBuf::from("C:/clean/bin"),
+            ]
+        );
+        assert!(!verification
+            .clean_environment
+            .path_entries
+            .contains(&PathBuf::from("C:/other/node")));
+
+        fake.dependencies = Some(
+            DependencyCandidates::new(
+                vec!["C:/selected/node/node".into(), "C:/other/node/node".into()],
+                vec!["C:/selected/npm/npm".into(), "C:/other/npm/npm".into()],
+                None,
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            verify_tool(&fake, tool_strategy(ToolId::Codex).unwrap(), None).status,
+            ToolInstallStatus::InstalledNotRunnable
+        );
+    }
+
+    #[test]
+    fn normalize_error_preserves_preclassified_code_action_and_redacts_detail() {
+        let mut fake = fake(&["C:/codex"], Ok(ToolCommandOutput::success("1.2.3")));
+        fake.dependencies = None;
+        fake.dependency_error = Some(InstallFailure {
+            code: InstallFailureCode::PermissionDenied,
+            stage: InstallStage::InstallingTools,
+            exit_code: Some(13),
+            retryable: false,
+            requires_user_action: true,
+            message_key: "installer.failure.permission_denied".into(),
+            recommended_action: RecommendedAction::GrantPermission,
+            detail: Some("API_KEY=secret permission denied".into()),
+        });
+
+        let failure = verify_tool(&fake, tool_strategy(ToolId::Codex).unwrap(), None)
+            .failure
+            .unwrap();
+        assert_eq!(failure.code, InstallFailureCode::PermissionDenied);
+        assert_eq!(
+            failure.recommended_action,
+            RecommendedAction::GrantPermission
+        );
+        assert_eq!(failure.stage, InstallStage::Verifying);
+        assert!(!failure.detail.unwrap().contains("secret"));
     }
 
     #[test]
