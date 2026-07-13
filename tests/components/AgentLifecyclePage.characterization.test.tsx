@@ -346,7 +346,7 @@ describe("AgentLifecyclePage characterization", () => {
     expect(toastError).not.toHaveBeenCalled();
   });
 
-  it("keeps privileged preparation available when a stage snapshot resolves", async () => {
+  it("enters progress after privileged confirmation despite a racing stage snapshot", async () => {
     let resolveTask!: (task: unknown) => void;
     const taskSnapshot = new Promise<unknown>((resolve) => {
       resolveTask = resolve;
@@ -375,18 +375,23 @@ describe("AgentLifecyclePage characterization", () => {
     const listener = listenAllInstall.mock.calls[0][0] as (
       event: unknown,
     ) => Promise<void>;
+    fireEvent.click(screen.getByRole("checkbox"));
     const applyEvent = listener({
       type: "stage_changed",
       task_id: "install-1",
-      stage: "awaiting_confirmation",
+      stage: "repairing",
     });
     await waitFor(() =>
       expect(getInstallTask).toHaveBeenCalledWith("install-1"),
     );
+    fireEvent.click(screen.getByText("settings.installer.continue"));
+    await waitFor(() => expect(startInstall).toHaveBeenCalledTimes(1));
+    expect(screen.getByText("settings.installer.progress")).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
     resolveTask({
       task_id: "install-1",
       request: { task_id: "install-1", tools: ["claude"], action: "install" },
-      stage: "awaiting_confirmation",
+      stage: "repairing",
       plan: { actions: [] },
       result: null,
       cancellation_requested: false,
@@ -394,18 +399,86 @@ describe("AgentLifecyclePage characterization", () => {
     });
     await applyEvent;
 
-    fireEvent.click(screen.getByRole("checkbox"));
-    fireEvent.click(screen.getByText("settings.installer.continue"));
-    await waitFor(() =>
-      expect(startInstall).toHaveBeenCalledWith({
-        request: {
-          task_id: "install-1",
-          tools: ["claude"],
-          action: "install",
-        },
-        confirmed_action_ids: ["install-node"],
-      }),
+    expect(startInstall).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+  });
+
+  it("does not continue an update after unmount", async () => {
+    let rejectUpdate!: (error: Error) => void;
+    const update = new Promise<void>((_resolve, reject) => {
+      rejectUpdate = reject;
+    });
+    getToolVersions.mockResolvedValue(
+      makeToolVersions(new Set(["claude"]), new Set(["claude"])),
     );
+    probeToolInstallations.mockResolvedValue([]);
+    runToolLifecycleAction.mockReturnValue(update);
+    const view = render(<AgentLifecyclePage />);
+    fireEvent.click(await screen.findByText("common.refresh"));
+    await screen.findByText("settings.toolUpdate");
+    getToolVersions.mockClear();
+
+    fireEvent.click(screen.getByText("settings.toolUpdate"));
+    await waitFor(() => expect(runToolLifecycleAction).toHaveBeenCalledOnce());
+    view.unmount();
+    rejectUpdate(new Error("update failed"));
+    await update.catch(() => undefined);
+
+    expect(getToolVersions).not.toHaveBeenCalled();
+    expect(toastSuccess).not.toHaveBeenCalled();
+    expect(toastWarning).not.toHaveBeenCalled();
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("does not toast when confirmation rejects after unmount", async () => {
+    let rejectStart!: (error: Error) => void;
+    const start = new Promise<string>((_resolve, reject) => {
+      rejectStart = reject;
+    });
+    prepareInstall.mockResolvedValue({
+      task_id: "install-1",
+      requires_confirmation: true,
+      plan: { actions: [] },
+    });
+    startInstall.mockReturnValue(start);
+    const view = render(<AgentLifecyclePage />);
+    fireEvent.click((await screen.findAllByText("settings.toolInstall"))[0]);
+    await screen.findByText("settings.installer.continue");
+
+    fireEvent.click(screen.getByText("settings.installer.continue"));
+    await waitFor(() => expect(startInstall).toHaveBeenCalledOnce());
+    view.unmount();
+    rejectStart(new Error("start failed"));
+    await start.catch(() => undefined);
+
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("does not toast when cancellation rejects after unmount", async () => {
+    let rejectCancel!: (error: Error) => void;
+    const cancellation = new Promise<void>((_resolve, reject) => {
+      rejectCancel = reject;
+    });
+    prepareInstall.mockResolvedValue({
+      task_id: "install-1",
+      requires_confirmation: true,
+      plan: { actions: [] },
+    });
+    cancelInstall.mockReturnValue(cancellation);
+    const view = render(<AgentLifecyclePage />);
+    fireEvent.click((await screen.findAllByText("settings.toolInstall"))[0]);
+    fireEvent.click(await screen.findByText("settings.installer.continue"));
+    await screen.findByText("settings.installer.cancel");
+
+    fireEvent.click(screen.getByText("settings.installer.cancel"));
+    await waitFor(() =>
+      expect(cancelInstall).toHaveBeenCalledWith("install-1"),
+    );
+    view.unmount();
+    rejectCancel(new Error("cancel failed"));
+    await cancellation.catch(() => undefined);
+
+    expect(toastError).not.toHaveBeenCalled();
   });
 
   it("does not finish a bulk diagnostic after unmount", async () => {
@@ -441,13 +514,10 @@ describe("AgentLifecyclePage characterization", () => {
       resolveRefresh = resolve;
     });
     const view = render(<AgentLifecyclePage />);
-    await waitFor(() =>
-      expect(screen.getAllByText("common.notInstalled")).toHaveLength(6),
-    );
     getToolVersions.mockClear();
     getToolVersions.mockReturnValue(refresh);
 
-    fireEvent.click(screen.getByText("common.refresh"));
+    fireEvent.click(await screen.findByText("common.refresh"));
     await waitFor(() => expect(getToolVersions).toHaveBeenCalledTimes(6));
     view.unmount();
     resolveRefresh(toolVersions);
@@ -483,6 +553,10 @@ describe("AgentLifecyclePage characterization", () => {
 
   it("routes native installs through the installer API and preserves diagnosis after closing the flow", async () => {
     render(<AgentLifecyclePage />);
+    fireEvent.click(await screen.findByText("common.refresh"));
+    await waitFor(() =>
+      expect(screen.getAllByText("common.notInstalled")).toHaveLength(6),
+    );
     const installButtons = await screen.findAllByText("settings.toolInstall");
 
     fireEvent.click(installButtons[0]);

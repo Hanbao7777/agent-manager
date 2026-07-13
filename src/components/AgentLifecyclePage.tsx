@@ -594,6 +594,7 @@ export function AgentLifecyclePage() {
       let succeeded = 0;
 
       for (const toolName of toolNames) {
+        if (!mounted.current) return;
         setToolActions((prev) => ({ ...prev, [toolName]: action }));
         try {
           const previousTool = toolVersionByName.get(toolName);
@@ -605,11 +606,13 @@ export function AgentLifecyclePage() {
             action,
             wslShellByTool,
           );
+          if (!mounted.current) return;
           // 静默执行真正结束后刷新该工具版本，卡片立即反映结果。
           const refreshed = await refreshToolVersions(
             [toolName],
             wslShellByTool,
           );
+          if (!mounted.current) return;
           const tool = refreshed.find((t) => t.name === toolName);
           if (tool?.version) {
             const latestVersion = tool.latest_version ?? previousLatestVersion;
@@ -631,13 +634,13 @@ export function AgentLifecyclePage() {
                 soft: true,
                 kind: "versionUnchanged",
               });
-              void diagnoseToolSilently(toolName);
+              if (mounted.current) void diagnoseToolSilently(toolName);
             } else {
               succeeded += 1;
               // 升级成功后无条件补诊：版本没变多半被另一处遮蔽，版本变了另一处也可能仍在，
               // 两种都要刷新冲突展示（diagnoseToolSilently 无冲突时会自动清旧）。
               if (action === "update") {
-                void diagnoseToolSilently(toolName);
+                if (mounted.current) void diagnoseToolSilently(toolName);
               }
             }
           } else {
@@ -652,9 +655,10 @@ export function AgentLifecyclePage() {
               kind: "notRunnable",
             });
             // 装了却跑不起来同样可能源于多处安装，自动诊断帮用户定位。
-            void diagnoseToolSilently(toolName);
+            if (mounted.current) void diagnoseToolSilently(toolName);
           }
         } catch (error) {
+          if (!mounted.current) return;
           console.error(
             `[AboutSection] Failed to run tool action for ${toolName}`,
             error,
@@ -662,6 +666,7 @@ export function AgentLifecyclePage() {
           const detail = extractErrorMessage(error) || String(error);
           failures.push({ toolName, detail, soft: false });
         } finally {
+          if (!mounted.current) return;
           setToolActions((prev) => {
             const next = { ...prev };
             delete next[toolName];
@@ -670,6 +675,7 @@ export function AgentLifecyclePage() {
         }
       }
 
+      if (!mounted.current) return;
       if (isBatch) {
         setBatchAction(null);
       }
@@ -822,17 +828,20 @@ export function AgentLifecyclePage() {
         try {
           reports = await settingsApi.probeToolInstallations(toolNames);
         } catch (error) {
+          if (!mounted.current) return;
           // 探测失败不应阻断升级：退回直接执行（等同旧行为）。
           console.error("[AboutSection] probeToolInstallations failed", error);
           await executeRun(toolNames, action);
           return;
         }
+        if (!mounted.current) return;
         const needConfirm = reports.filter((r) => r.needs_confirmation);
         if (needConfirm.length === 0) {
           await executeRun(toolNames, action);
           return;
         }
-        setPendingUpgrade({ toolNames, plans: needConfirm });
+        if (mounted.current)
+          setPendingUpgrade({ toolNames, plans: needConfirm });
       } finally {
         if (!mounted.current) return;
         setPreflightTools((prev) => {
@@ -867,7 +876,27 @@ export function AgentLifecyclePage() {
           },
           confirmed_action_ids: actionIds,
         });
+        if (!mounted.current) return;
+        setInstallFlow({
+          visible: true,
+          preparation: null,
+          task: {
+            task_id: preparation.task_id,
+            request: {
+              task_id: preparation.task_id,
+              tools: installFlow.tools,
+              action: "install",
+            },
+            stage: "repairing",
+            plan: preparation.plan,
+            result: null,
+            cancellation_requested: false,
+            interrupted: false,
+          },
+          tools: installFlow.tools,
+        });
       } catch (error) {
+        if (!mounted.current) return;
         console.error("[AboutSection] Failed to confirm native install", error);
         toast.error(t("settings.installer.failed"), {
           description: extractErrorMessage(error) || undefined,
@@ -885,6 +914,7 @@ export function AgentLifecyclePage() {
     try {
       await installerApi.cancel(taskId);
     } catch (error) {
+      if (!mounted.current) return;
       console.error("[AboutSection] Failed to cancel native install", error);
       toast.error(t("settings.installer.failed"), {
         description: extractErrorMessage(error) || undefined,
