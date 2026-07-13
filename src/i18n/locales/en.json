@@ -84,6 +84,14 @@
         "installed_not_runnable": "Installed but not runnable",
         "skipped": "Skipped"
       },
+      "resultStatus": {
+        "succeeded": "Installation completed",
+        "succeeded_with_conflicts": "Installation completed with conflicts",
+        "installed_not_runnable": "Installation completed but tool cannot run",
+        "cancelled_by_user": "Installation cancelled",
+        "needs_user_action": "Installation needs your attention",
+        "failed": "Installation failed"
+      },
       "failure": {
         "unsupported_platform": "This platform is not supported",
         "unsupported_architecture": "This CPU architecture is not supported",

@@ -84,6 +84,14 @@
         "installed_not_runnable": "インストール済みですが実行できません",
         "skipped": "スキップ済み"
       },
+      "resultStatus": {
+        "succeeded": "インストールが完了しました",
+        "succeeded_with_conflicts": "競合がありますがインストールが完了しました",
+        "installed_not_runnable": "インストールは完了しましたがツールを実行できません",
+        "cancelled_by_user": "インストールをキャンセルしました",
+        "needs_user_action": "インストールには対応が必要です",
+        "failed": "インストールに失敗しました"
+      },
       "failure": {
         "unsupported_platform": "このプラットフォームはサポートされていません",
         "unsupported_architecture": "この CPU アーキテクチャはサポートされていません",

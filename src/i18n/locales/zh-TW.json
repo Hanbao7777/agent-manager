@@ -54,6 +54,14 @@
         "installed_not_runnable": "已安裝但無法執行",
         "skipped": "已略過"
       },
+      "resultStatus": {
+        "succeeded": "安裝完成",
+        "succeeded_with_conflicts": "安裝完成，但存在衝突",
+        "installed_not_runnable": "安裝完成，但工具無法執行",
+        "cancelled_by_user": "安裝已取消",
+        "needs_user_action": "安裝需要您的處理",
+        "failed": "安裝失敗"
+      },
       "failure": {
         "unsupported_platform": "不支援此平台",
         "unsupported_architecture": "不支援此 CPU 架構",

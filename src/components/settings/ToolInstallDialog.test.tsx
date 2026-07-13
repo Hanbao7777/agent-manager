@@ -1,7 +1,10 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ToolInstallDialog } from "./ToolInstallDialog";
-import type { InstallPreparation } from "@/lib/api/installer";
+import type {
+  InstallPreparation,
+  InstallTaskStatus,
+} from "@/lib/api/installer";
 import en from "@/i18n/locales/en.json";
 import ja from "@/i18n/locales/ja.json";
 import zhTW from "@/i18n/locales/zh-TW.json";
@@ -20,6 +23,16 @@ vi.mock("react-i18next", () => ({
         "settings.installer.status.installed_not_runnable":
           "Installed but not runnable",
         "settings.installer.status.skipped": "Skipped",
+        "settings.installer.resultStatus.succeeded": "Installation completed",
+        "settings.installer.resultStatus.succeeded_with_conflicts":
+          "Installation completed with conflicts",
+        "settings.installer.resultStatus.installed_not_runnable":
+          "Installation completed but tool cannot run",
+        "settings.installer.resultStatus.cancelled_by_user":
+          "Installation cancelled",
+        "settings.installer.resultStatus.needs_user_action":
+          "Installation needs your attention",
+        "settings.installer.resultStatus.failed": "Installation failed",
         "settings.installer.retry": "Retry",
         "settings.installer.diagnostics": "Diagnostics",
         "settings.installer.failure.network_timeout":
@@ -208,6 +221,50 @@ describe("ToolInstallDialog", () => {
     expect(screen.getByText("Failed")).toBeInTheDocument();
     expect(screen.getByText("Installed but not runnable")).toBeInTheDocument();
     expect(screen.getByText("Skipped")).toBeInTheDocument();
+  });
+
+  it("shows the overall result status when no tool result is available", () => {
+    const statuses: Array<[InstallTaskStatus, string]> = [
+      ["succeeded", "Installation completed"],
+      ["succeeded_with_conflicts", "Installation completed with conflicts"],
+      ["installed_not_runnable", "Installation completed but tool cannot run"],
+      ["cancelled_by_user", "Installation cancelled"],
+      ["needs_user_action", "Installation needs your attention"],
+      ["failed", "Installation failed"],
+    ];
+    const { rerender } = render(
+      <ToolInstallDialog
+        open
+        preparation={null}
+        task={null}
+        toolName={(tool) => tool}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    for (const [status, label] of statuses) {
+      rerender(
+        <ToolInstallDialog
+          open
+          preparation={null}
+          task={{
+            task_id: "install-1",
+            request: { task_id: "install-1", tools: [], action: "install" },
+            stage: "completed",
+            plan: { actions: [] },
+            cancellation_requested: status === "cancelled_by_user",
+            interrupted: false,
+            result: { status, tools: [], failure: null },
+          }}
+          toolName={(tool) => tool}
+          onConfirm={vi.fn()}
+          onCancel={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
   });
 
   it("requires fresh consent when a dialog is reopened for another task", () => {

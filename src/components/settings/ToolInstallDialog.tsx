@@ -131,6 +131,9 @@ export function ToolInstallDialog({
         </DialogHeader>
         {result ? (
           <div className="space-y-2">
+            <p className="text-sm font-medium">
+              {t(`settings.installer.resultStatus.${result.status}`)}
+            </p>
             {result.failure && (
               <div className="rounded border border-red-500/20 bg-red-500/5 p-3 text-sm">
                 <div className="flex items-center gap-2 font-medium">
