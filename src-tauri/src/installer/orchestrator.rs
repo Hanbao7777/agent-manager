@@ -697,15 +697,7 @@ impl OrchestratorRuntime for CommandRuntime {
                     .output()
             }
             None if tool == ToolId::Hermes => {
-                if cfg!(target_os = "windows") {
-                    std::process::Command::new("powershell.exe")
-                        .args(["-NoProfile", "-Command", "irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1 | iex"])
-                        .output()
-                } else {
-                    std::process::Command::new("bash")
-                        .args(["-c", "tmp=$(mktemp) && curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh -o \"$tmp\" && bash \"$tmp\"; status=$?; rm -f \"$tmp\"; exit $status"])
-                        .output()
-                }
+                return tool_failure(tool, "no approved verified Hermes installer available");
             }
             None => return tool_failure(tool, "no approved installer available"),
         };
@@ -971,6 +963,17 @@ mod tests {
                 .unwrap_err()
                 .code,
             InstallFailureCode::PrivilegeDeclined
+        );
+    }
+
+    #[test]
+    fn hermes_install_fails_closed_without_a_verified_installer() {
+        let result = CommandRuntime.install_tool(ToolId::Hermes);
+
+        assert_eq!(result.status, ToolInstallStatus::Failed);
+        assert_eq!(
+            result.failure.unwrap().detail.as_deref(),
+            Some("no approved verified Hermes installer available")
         );
     }
     #[test]

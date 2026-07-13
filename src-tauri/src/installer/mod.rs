@@ -87,9 +87,6 @@ pub fn start_tool_install(
                 );
             }
         }
-        // The validation failure is retained in the store only when a task
-        // existed; no synthetic stage sequence is emitted after the fact.
-        let _ = emitted_task_id;
     });
     Ok(task_id)
 }
