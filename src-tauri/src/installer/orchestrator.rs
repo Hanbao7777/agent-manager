@@ -7,10 +7,10 @@ use std::{
 };
 
 use super::{
-    build_repair_plan, node_policy, ConfirmedInstallRequest, EnvironmentSnapshot, InstallFailure,
-    InstallFailureCode, InstallPreparation, InstallRequest, InstallStage, InstallTaskResult,
-    InstallTaskSnapshot, InstallTaskStatus, RecommendedAction, RepairPlan, ToolId,
-    ToolInstallResult, ToolInstallStatus,
+    build_repair_plan, node_policy, CleanEnvironment, ConfirmedInstallRequest, EnvironmentSnapshot,
+    InstallFailure, InstallFailureCode, InstallPreparation, InstallRequest, InstallStage,
+    InstallTaskResult, InstallTaskSnapshot, InstallTaskStatus, RecommendedAction, RepairPlan,
+    ResolvedNodeNpmPair, ToolId, ToolInstallResult, ToolInstallStatus,
 };
 
 use std::{
@@ -424,6 +424,17 @@ impl InstallTaskStore {
             );
         }
         task.cancellation_requested = true;
+        if matches!(
+            task.stage,
+            InstallStage::Preflight | InstallStage::AwaitingConfirmation
+        ) {
+            task.stage = InstallStage::Completed;
+            task.result = Some(InstallTaskResult {
+                status: InstallTaskStatus::CancelledByUser,
+                tools: Vec::new(),
+                failure: None,
+            });
+        }
         if let Some(token) = self
             .cancellations
             .read()
@@ -577,9 +588,16 @@ impl OrchestratorRuntime for CommandRuntime {
         // unrelated package for Hermes.
         let package = strategy.npm_package.or(strategy.fallback_npm_package);
         let output = match package {
-            Some(package) => std::process::Command::new("npm")
-                .args(["install", "--global", package])
-                .output(),
+            Some(package) => {
+                let pair = match resolve_node_npm_pair() {
+                    Ok(pair) => pair,
+                    Err(detail) => return tool_failure(tool, &detail),
+                };
+                let environment = selected_pair_environment(&pair);
+                command_with_environment(&pair.npm, &environment)
+                    .args(["install", "--global", package])
+                    .output()
+            }
             None if tool == ToolId::Hermes => {
                 if cfg!(target_os = "windows") {
                     std::process::Command::new("powershell.exe")
@@ -595,12 +613,17 @@ impl OrchestratorRuntime for CommandRuntime {
         };
         match output {
             Ok(output) if output.status.success() => {
-                let path = resolve_host_command(
-                    strategy.command_name,
-                    &std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-                        .collect::<Vec<_>>(),
-                );
-                let version = path.as_deref().and_then(command_version);
+                let pair = resolve_node_npm_pair().ok();
+                let environment = pair.as_ref().map(selected_pair_environment);
+                let path = environment.as_ref().and_then(|environment| {
+                    resolve_in_environment(strategy.command_name, environment)
+                });
+                let version = match (path.as_deref(), environment.as_ref()) {
+                    (Some(path), Some(environment)) => {
+                        command_version_in_environment(path, environment)
+                    }
+                    _ => None,
+                };
                 match version {
                     Some(version) => ToolInstallResult {
                         tool,
@@ -674,6 +697,71 @@ fn resolve_host_command(name: &str, entries: &[PathBuf]) -> Option<PathBuf> {
             ]
         })
         .find(|candidate| candidate.is_file())
+}
+
+fn resolve_node_npm_pair() -> Result<ResolvedNodeNpmPair, String> {
+    let entries: Vec<PathBuf> =
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect();
+    let nodes = entries
+        .iter()
+        .filter_map(|entry| resolve_host_command("node", std::slice::from_ref(entry)))
+        .collect::<Vec<_>>();
+    let npms = entries
+        .iter()
+        .filter_map(|entry| resolve_host_command("npm", std::slice::from_ref(entry)))
+        .collect::<Vec<_>>();
+    if nodes.len() != 1 || npms.len() != 1 {
+        return Err("a single coherent Node.js/npm installation is required".into());
+    }
+    let node = nodes.into_iter().next().unwrap();
+    let npm = npms.into_iter().next().unwrap();
+    if node.parent() != npm.parent() {
+        return Err("resolved Node.js and npm do not share an installation directory".into());
+    }
+    Ok(ResolvedNodeNpmPair {
+        node,
+        npm,
+        source: "PATH",
+    })
+}
+
+fn selected_pair_environment(pair: &ResolvedNodeNpmPair) -> CleanEnvironment {
+    super::selected_environment(
+        &CleanEnvironment {
+            path_entries: std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                .collect(),
+        },
+        pair,
+    )
+}
+
+fn command_with_environment(
+    program: &Path,
+    environment: &CleanEnvironment,
+) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
+    if let Ok(path) = std::env::join_paths(&environment.path_entries) {
+        command.env("PATH", path);
+    }
+    command
+}
+
+fn resolve_in_environment(name: &str, environment: &CleanEnvironment) -> Option<PathBuf> {
+    resolve_host_command(name, &environment.path_entries)
+}
+
+fn command_version_in_environment(path: &Path, environment: &CleanEnvironment) -> Option<String> {
+    let output = command_with_environment(path, environment)
+        .arg("--version")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .find(|part| part.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        .map(str::to_owned)
 }
 
 fn command_version(path: &Path) -> Option<String> {

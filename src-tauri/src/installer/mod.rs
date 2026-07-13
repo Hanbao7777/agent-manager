@@ -118,6 +118,23 @@ pub fn get_install_task(
 pub fn cancel_install_task(
     task_id: String,
     store: tauri::State<'_, InstallTaskStore>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
-    store.cancel(&task_id)
+    store.cancel(&task_id)?;
+    if let Some(task) = store.get(&task_id) {
+        if let Some(result) = task.result {
+            let _ = app.emit(
+                "agent-manager://install-task",
+                InstallTaskEvent::StageChanged {
+                    task_id: task_id.clone(),
+                    stage: InstallStage::Completed,
+                },
+            );
+            let _ = app.emit(
+                "agent-manager://install-task",
+                InstallTaskEvent::Finished { task_id, result },
+            );
+        }
+    }
+    Ok(())
 }
