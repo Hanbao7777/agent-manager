@@ -7,7 +7,7 @@ mod proxy;
 #[cfg(target_os = "windows")]
 mod settings;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 #[cfg(target_os = "windows")]

@@ -248,6 +248,7 @@ export function AgentLifecyclePage() {
   const unlistenInstallEvents = useRef<(() => void) | null>(null);
   const unlistenExitBlocked = useRef<(() => void) | null>(null);
   const activeInstallTaskId = useRef<string | null>(null);
+  const mounted = useRef(true);
 
   const toolVersionByName = useMemo(() => {
     return new Map(toolVersions.map((tool) => [tool.name, tool]));
@@ -270,6 +271,7 @@ export function AgentLifecyclePage() {
       if (toolNames.length === 0) return [];
 
       // 单工具刷新使用统一后端入口（get_tool_versions）并带工具过滤。
+      if (!mounted.current) return [];
       setLoadingTools((prev) => {
         const next = { ...prev };
         for (const name of toolNames) next[name] = true;
@@ -282,6 +284,7 @@ export function AgentLifecyclePage() {
           wslOverrides,
         );
 
+        if (!mounted.current) return [];
         setToolVersions((prev) => mergeToolVersions(prev, updated));
         // 同步进模块缓存，供切 Tab 重挂时复用。时间戳沿用上次「全量加载」的（单工具
         // 刷新不算全量、不重置 TTL）；缓存为空时以 at=0 起步——0 是「尚未完成全量加载」
@@ -298,11 +301,13 @@ export function AgentLifecyclePage() {
         console.error("[AboutSection] Failed to refresh tools", error);
         return [];
       } finally {
-        setLoadingTools((prev) => {
-          const next = { ...prev };
-          for (const name of toolNames) next[name] = false;
-          return next;
-        });
+        if (mounted.current) {
+          setLoadingTools((prev) => {
+            const next = { ...prev };
+            for (const name of toolNames) next[name] = false;
+            return next;
+          });
+        }
       }
     },
     [],
@@ -392,6 +397,7 @@ export function AgentLifecyclePage() {
   const diagnoseToolSilently = useCallback(async (toolName: ToolName) => {
     try {
       const [report] = await settingsApi.probeToolInstallations([toolName]);
+      if (!mounted.current) return;
       setToolDiagnostics((prev) => {
         if (report?.is_conflict) {
           return { ...prev, [toolName]: report.installs };
@@ -403,6 +409,7 @@ export function AgentLifecyclePage() {
         return next;
       });
     } catch (error) {
+      if (!mounted.current) return;
       console.error(
         `[AboutSection] Auto-diagnose failed for ${toolName}`,
         error,
@@ -411,6 +418,7 @@ export function AgentLifecyclePage() {
   }, []);
 
   useEffect(() => {
+    mounted.current = true;
     let disposed = false;
     void (async () => {
       try {
@@ -517,6 +525,7 @@ export function AgentLifecyclePage() {
     })();
     return () => {
       disposed = true;
+      mounted.current = false;
       unlistenInstallEvents.current?.();
       unlistenInstallEvents.current = null;
       unlistenExitBlocked.current?.();
