@@ -58,16 +58,35 @@ pub fn start_tool_install(
         .task_id
         .clone()
         .ok_or_else(|| "missing task id".to_string())?;
-    if store.get(&task_id).is_none() {
-        return Err("unknown install task".into());
-    }
+    store
+        .claim_start(&request)
+        .map_err(|error| error.detail.unwrap_or_else(|| error.message_key))?;
     let task_store = store.inner().clone();
     let emitted_task_id = task_id.clone();
     std::thread::spawn(move || {
         let event_app = app.clone();
-        let _ = task_store.start_with_events(request, &CommandRuntime, move |event| {
+        let result = task_store.start_with_events(request, &CommandRuntime, move |event| {
             let _ = event_app.emit("agent-manager://install-task", event);
         });
+        task_store.release_claim(&emitted_task_id);
+        if let Err(error) = result {
+            if let Some(result) = task_store.fail_background(&emitted_task_id, error) {
+                let _ = app.emit(
+                    "agent-manager://install-task",
+                    InstallTaskEvent::StageChanged {
+                        task_id: emitted_task_id.clone(),
+                        stage: InstallStage::Completed,
+                    },
+                );
+                let _ = app.emit(
+                    "agent-manager://install-task",
+                    InstallTaskEvent::Finished {
+                        task_id: emitted_task_id,
+                        result,
+                    },
+                );
+            }
+        }
         // The validation failure is retained in the store only when a task
         // existed; no synthetic stage sequence is emitted after the fact.
         let _ = emitted_task_id;

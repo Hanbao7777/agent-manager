@@ -127,6 +127,7 @@ pub async fn run_tool_lifecycle_action(
                 action: crate::installer::InstallAction::Install,
             },
             install_tasks.clone(),
+            app.clone(),
         )?;
         if preparation.requires_confirmation {
             return Err(format!(

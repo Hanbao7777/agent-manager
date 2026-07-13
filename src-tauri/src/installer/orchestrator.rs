@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, RwLock,
@@ -30,6 +30,7 @@ pub trait OrchestratorRuntime: Send + Sync {
 pub struct InstallTaskStore {
     tasks: Arc<RwLock<HashMap<String, InstallTaskSnapshot>>>,
     cancellations: Arc<RwLock<HashMap<String, Arc<AtomicBool>>>>,
+    claims: Arc<RwLock<HashSet<String>>>,
     persistence_path: Option<Arc<PathBuf>>,
 }
 
@@ -38,6 +39,7 @@ impl Default for InstallTaskStore {
         Self {
             tasks: Arc::default(),
             cancellations: Arc::default(),
+            claims: Arc::default(),
             persistence_path: None,
         }
     }
@@ -73,6 +75,7 @@ impl InstallTaskStore {
         let store = Self {
             tasks: Arc::new(RwLock::new(tasks)),
             cancellations: Arc::default(),
+            claims: Arc::default(),
             persistence_path: Some(Arc::new(path)),
         };
         store.persist();
@@ -163,6 +166,81 @@ impl InstallTaskStore {
         runtime: &R,
     ) -> Result<String, InstallFailure> {
         self.start_with_events(confirmed, runtime, |_| {})
+    }
+
+    /// Atomically validate confirmation and reserve a task for the background
+    /// worker. Commands call this before returning a task id to the frontend.
+    pub fn claim_start(
+        &self,
+        confirmed: &ConfirmedInstallRequest,
+    ) -> Result<String, InstallFailure> {
+        let task_id = confirmed
+            .request
+            .task_id
+            .clone()
+            .ok_or_else(|| failure(InstallFailureCode::PrivilegeDeclined, "missing task id"))?;
+        let task = self
+            .get(&task_id)
+            .ok_or_else(|| failure(InstallFailureCode::InstallerFailure, "unknown task"))?;
+        if !matches!(
+            task.stage,
+            InstallStage::Preflight | InstallStage::AwaitingConfirmation
+        ) {
+            return Err(failure(
+                InstallFailureCode::InstallerFailure,
+                "task has already started or completed",
+            ));
+        }
+        if task
+            .plan
+            .actions
+            .iter()
+            .filter(|action| action.requires_confirmation || action.requires_elevation)
+            .any(|action| {
+                !confirmed
+                    .confirmed_action_ids
+                    .iter()
+                    .any(|id| id == &action.id)
+            })
+        {
+            return Err(failure(
+                InstallFailureCode::PrivilegeDeclined,
+                "required action was not confirmed",
+            ));
+        }
+        let mut claims = self.claims.write().expect("task store poisoned");
+        if !claims.insert(task_id.clone()) {
+            return Err(failure(
+                InstallFailureCode::InstallerFailure,
+                "task has already started or completed",
+            ));
+        }
+        Ok(task_id)
+    }
+
+    pub fn release_claim(&self, task_id: &str) {
+        if let Ok(mut claims) = self.claims.write() {
+            claims.remove(task_id);
+        }
+    }
+
+    pub fn fail_background(
+        &self,
+        task_id: &str,
+        error: InstallFailure,
+    ) -> Option<InstallTaskResult> {
+        let mut tasks = self.tasks.write().ok()?;
+        let task = tasks.get_mut(task_id)?;
+        task.stage = InstallStage::Completed;
+        task.result = Some(InstallTaskResult {
+            status: InstallTaskStatus::Failed,
+            tools: Vec::new(),
+            failure: Some(error),
+        });
+        let result = task.result.clone();
+        drop(tasks);
+        self.persist();
+        result
     }
 
     pub fn start_with_events<R: OrchestratorRuntime, F: FnMut(super::InstallTaskEvent)>(
