@@ -218,8 +218,23 @@ pub async fn install_node_release(
     task_temp: PathBuf,
 ) -> Result<(), InstallFailure> {
     let temp = TaskTempGuard::new(task_temp)?;
-    let package = download_and_verify_node(release, temp.path()).await?;
-    install_node(adapter, &package)
+    continue_after_verified_download(
+        adapter,
+        download_and_verify_node(release, temp.path()).await,
+        install_node,
+    )
+}
+
+fn continue_after_verified_download<F>(
+    adapter: &dyn PlatformAdapter,
+    package: Result<PathBuf, InstallFailure>,
+    install: F,
+) -> Result<(), InstallFailure>
+where
+    F: FnOnce(&dyn PlatformAdapter, &Path) -> Result<(), InstallFailure>,
+{
+    let package = package?;
+    install(adapter, &package)
 }
 
 pub fn cleanup_task_temp(task_temp: &Path) {
@@ -361,7 +376,7 @@ mod tests {
     }
     #[test]
     fn selects_newest_allowed_lts_exact_asset() {
-        let index = r#"[{"version":"v24.1.0","lts":true,"files":["node-v24.1.0-x64.msi"]},{"version":"v22.9.0","lts":true,"files":["node-v22.9.0-x64.msi"]}]"#;
+        let index = r#"[{"version":"v24.1.0","lts":"Krypton","files":["node-v24.1.0-x64.msi"]},{"version":"v22.9.0","lts":"Jod","files":["node-v22.9.0-x64.msi"]}]"#;
         assert_eq!(
             resolve_node_release(
                 index,
@@ -390,6 +405,23 @@ mod tests {
         assert_eq!(release.version, "v24.1.0");
         assert_eq!(release.asset_name, "node-v24.1.0-x64.msi");
     }
+
+    #[test]
+    fn rejects_non_string_lts_rows_even_when_the_asset_exists() {
+        let index = r#"[{"version":"v24.2.0","lts":true,"files":["node-v24.2.0-x64.msi"]},{"version":"v24.1.0","lts":false,"files":["node-v24.1.0-x64.msi"]}]"#;
+
+        assert_eq!(
+            resolve_node_release(
+                index,
+                &crate::installer::node_policy(),
+                &TestAdapter,
+                Architecture::X64,
+            )
+            .unwrap_err()
+            .code,
+            InstallFailureCode::UnsupportedArchitecture
+        );
+    }
     #[test]
     fn checksum_requires_exact_asset() {
         assert_eq!(
@@ -414,17 +446,75 @@ mod tests {
     }
 
     #[test]
+    fn integrity_failure_stops_before_signature_or_install() {
+        let package = PathBuf::from("untrusted.msi");
+        let integrity_failure = verify_sha256(b"tampered", &sha256_hex(b"official"));
+        let mut install_calls = 0;
+
+        let result = continue_after_verified_download(
+            &TestAdapter,
+            integrity_failure.map(|_| package),
+            |_, _| {
+                install_calls += 1;
+                Ok(())
+            },
+        );
+
+        assert_eq!(
+            result.unwrap_err().code,
+            InstallFailureCode::DownloadIntegrityFailure
+        );
+        assert_eq!(install_calls, 0);
+    }
+
+    #[test]
+    fn signature_rejection_and_authorization_decline_keep_their_failure_codes() {
+        let signature = crate::installer::classify_process_failure(
+            InstallStage::Repairing,
+            Some(1),
+            "",
+            "Authenticode signature verification failed",
+        );
+        let declined = crate::installer::classify_process_failure(
+            InstallStage::Repairing,
+            Some(1),
+            "",
+            "installer cancelled by the user",
+        );
+
+        assert_eq!(
+            signature.code,
+            InstallFailureCode::SignatureVerificationFailure
+        );
+        assert_eq!(declined.code, InstallFailureCode::PrivilegeDeclined);
+    }
+
+    #[test]
     fn numeric_version_ordering_does_not_use_lexical_minor_order() {
         assert!(version_key("v24.10.0") > version_key("v24.9.0"));
     }
 
     #[test]
-    fn task_temp_guard_cleans_success_and_failure_paths() {
+    fn task_temp_guard_cleans_success_failure_and_cancellation_paths() {
         let path = std::env::temp_dir().join(format!("installer-test-{}", std::process::id()));
         {
             let guard = TaskTempGuard::new(path.clone()).unwrap();
             fs::write(guard.path().join("artifact"), b"temporary").unwrap();
         }
+        assert!(!path.exists());
+
+        let guard = TaskTempGuard::new(path.clone()).unwrap();
+        fs::write(guard.path().join("failed-artifact"), b"temporary").unwrap();
+        let _: Result<(), InstallFailure> = Err(failure(
+            InstallFailureCode::InstallerFailure,
+            "simulated install failure",
+        ));
+        drop(guard);
+        assert!(!path.exists());
+
+        let guard = TaskTempGuard::new(path.clone()).unwrap();
+        fs::write(guard.path().join("cancelled-artifact"), b"temporary").unwrap();
+        drop(guard);
         assert!(!path.exists());
     }
 }

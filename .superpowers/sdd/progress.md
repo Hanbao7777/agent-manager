@@ -13,7 +13,7 @@ Tasks:
 - Task 2: complete (commit `ca2a47b5`, passed spec and quality review)
 - Task 3: complete (commit `970faaf1`, passed spec and quality review)
 - Task 4: complete recovery (`task_d8843c61c323`; commits `19a67d49`, `3bbce1bb`, and `7991c6f5`; review ledger follows in this commit)
-- Task 5: complete recovery (base `0248844c`, ledger `c65f4586`, secure-adapter corrections `1569ef50`); prior dispatch `task_e8174f0aafbb` ended in three premature worker terminations, then this revalidation confirmed both review gates with focused regression coverage.
+- Task 5: complete recovery (base `0248844c`, ledger `c65f4586`, secure-adapter corrections `1569ef50`); prior dispatch `task_e8174f0aafbb` ended in three premature worker terminations, then this revalidation added adapter-boundary coverage for LTS assets, integrity ordering, cleanup, signature/authorization failures, and PATH parsing. The Task 4 verifier tests are reused only for selected-pair-only PATH propagation and representative/missing/ambiguous Node/npm pairs.
 - Task 6: pending
 - Task 7: pending
 - Task 8: pending

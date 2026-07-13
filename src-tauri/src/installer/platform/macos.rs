@@ -1,6 +1,6 @@
 use super::{CommandSpec, PlatformAdapter};
 use crate::installer::{Architecture, CleanEnvironment, InstallFailure, Platform};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub struct MacosAdapter;
 impl PlatformAdapter for MacosAdapter {
@@ -23,42 +23,53 @@ impl PlatformAdapter for MacosAdapter {
         osascript_install_command(package)
     }
     fn refresh_clean_environment(&self) -> Result<CleanEnvironment, InstallFailure> {
-        let output = std::process::Command::new("/bin/zsh")
+        let output = std::process::Command::new(login_shell())
             .args(["-lc", "/usr/libexec/path_helper -s"])
             .output()
-            .map_err(|error| InstallFailure {
-                code: crate::installer::InstallFailureCode::PathNotVisible,
-                stage: crate::installer::InstallStage::Repairing,
-                exit_code: None,
-                retryable: true,
-                requires_user_action: false,
-                message_key: "installer.failure.path_not_visible".into(),
-                recommended_action: crate::installer::RecommendedAction::Retry,
-                detail: Some(crate::installer::redact_diagnostic(&error.to_string())),
-            })?;
+            .map_err(|error| path_not_visible(None, &error.to_string()))?;
         let script = String::from_utf8_lossy(&output.stdout);
         if !output.status.success() {
-            return Err(InstallFailure {
-                code: crate::installer::InstallFailureCode::PathNotVisible,
-                stage: crate::installer::InstallStage::Repairing,
-                exit_code: output.status.code(),
-                retryable: true,
-                requires_user_action: false,
-                message_key: "installer.failure.path_not_visible".into(),
-                recommended_action: crate::installer::RecommendedAction::Retry,
-                detail: Some(crate::installer::redact_diagnostic(
-                    &String::from_utf8_lossy(&output.stderr),
-                )),
-            });
+            return Err(path_not_visible(
+                output.status.code(),
+                &String::from_utf8_lossy(&output.stderr),
+            ));
         }
-        let path = script
-            .split("PATH=\"")
-            .nth(1)
-            .and_then(|value| value.split('"').next())
-            .unwrap_or_default();
         Ok(CleanEnvironment {
-            path_entries: std::env::split_paths(path).collect(),
+            path_entries: path_entries_from_path_helper(&script)?,
         })
+    }
+}
+
+fn login_shell() -> PathBuf {
+    std::env::var_os("SHELL")
+        .filter(|shell| Path::new(shell).is_absolute())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/bin/zsh"))
+}
+
+fn path_entries_from_path_helper(script: &str) -> Result<Vec<PathBuf>, InstallFailure> {
+    let path = script
+        .split("PATH=\"")
+        .nth(1)
+        .and_then(|value| value.split('"').next())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| path_not_visible(None, "path_helper returned no PATH"))?;
+    let entries = std::env::split_paths(path).collect::<Vec<_>>();
+    (!entries.is_empty())
+        .then_some(entries)
+        .ok_or_else(|| path_not_visible(None, "path_helper returned an empty PATH"))
+}
+
+fn path_not_visible(exit_code: Option<i32>, detail: &str) -> InstallFailure {
+    InstallFailure {
+        code: crate::installer::InstallFailureCode::PathNotVisible,
+        stage: crate::installer::InstallStage::Repairing,
+        exit_code,
+        retryable: true,
+        requires_user_action: false,
+        message_key: "installer.failure.path_not_visible".into(),
+        recommended_action: crate::installer::RecommendedAction::Retry,
+        detail: Some(crate::installer::redact_diagnostic(detail)),
     }
 }
 pub fn apple_script_literal(value: &str) -> String {
@@ -99,5 +110,25 @@ mod tests {
         assert_eq!(command.program, "/bin/sh");
         assert_eq!(command.args[3], "/tmp/a hostile;name.pkg");
         assert!(command.args[1].contains("Developer ID Installer"));
+    }
+
+    #[test]
+    fn path_helper_refresh_requires_a_nonempty_path() {
+        assert_eq!(
+            path_entries_from_path_helper("PATH=\"/usr/local/bin:/usr/bin\"; export PATH;")
+                .unwrap(),
+            vec![PathBuf::from("/usr/local/bin"), PathBuf::from("/usr/bin")]
+        );
+        assert_eq!(
+            path_entries_from_path_helper("PATH=\"\"; export PATH;")
+                .unwrap_err()
+                .code,
+            crate::installer::InstallFailureCode::PathNotVisible
+        );
+    }
+
+    #[test]
+    fn configured_login_shell_is_used_when_absolute() {
+        assert!(login_shell().is_absolute());
     }
 }

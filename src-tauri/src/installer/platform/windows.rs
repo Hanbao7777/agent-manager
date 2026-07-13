@@ -28,13 +28,13 @@ impl PlatformAdapter for WindowsAdapter {
     }
     fn refresh_clean_environment(&self) -> Result<CleanEnvironment, InstallFailure> {
         Ok(CleanEnvironment {
-            path_entries: refreshed_path_entries(),
+            path_entries: refreshed_path_entries()?,
         })
     }
 }
 
 #[cfg(target_os = "windows")]
-fn refreshed_path_entries() -> Vec<std::path::PathBuf> {
+fn refreshed_path_entries() -> Result<Vec<std::path::PathBuf>, InstallFailure> {
     use winreg::{enums::*, RegKey};
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
@@ -46,19 +46,37 @@ fn refreshed_path_entries() -> Vec<std::path::PathBuf> {
         .open_subkey(r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment")
         .ok()
         .and_then(|key| key.get_value::<String, _>("Path").ok());
-    let joined = [user, system]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join(";");
-    std::env::split_paths(std::ffi::OsStr::new(&joined)).collect()
+    path_entries_from_registry_values(user, system)
 }
 
 #[cfg(not(target_os = "windows"))]
-fn refreshed_path_entries() -> Vec<std::path::PathBuf> {
-    std::env::var_os("PATH")
-        .map(|value| std::env::split_paths(&value).collect())
-        .unwrap_or_default()
+fn refreshed_path_entries() -> Result<Vec<std::path::PathBuf>, InstallFailure> {
+    path_entries_from_registry_values(std::env::var("PATH").ok(), None)
+}
+
+fn path_entries_from_registry_values(
+    user: Option<String>,
+    system: Option<String>,
+) -> Result<Vec<std::path::PathBuf>, InstallFailure> {
+    let joined = [user, system]
+        .into_iter()
+        .flatten()
+        .filter(|value| !value.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join(";");
+    let entries = std::env::split_paths(std::ffi::OsStr::new(&joined)).collect::<Vec<_>>();
+    (!entries.is_empty())
+        .then_some(entries)
+        .ok_or_else(|| InstallFailure {
+            code: InstallFailureCode::PathNotVisible,
+            stage: InstallStage::Repairing,
+            exit_code: None,
+            retryable: true,
+            requires_user_action: false,
+            message_key: "installer.failure.path_not_visible".into(),
+            recommended_action: RecommendedAction::Retry,
+            detail: Some("Windows user and system PATH are unavailable".into()),
+        })
 }
 
 pub const AUTHENTICODE_SCRIPT: &str =
@@ -103,5 +121,18 @@ mod tests {
         let command = authenticode_command(Path::new(r"C:\a;$(whoami)\node.msi"));
         assert_eq!(command.args[3], AUTHENTICODE_SCRIPT);
         assert_eq!(command.args[4], r"C:\a;$(whoami)\node.msi");
+    }
+
+    #[test]
+    fn registry_path_refresh_requires_at_least_one_nonempty_value() {
+        assert!(
+            path_entries_from_registry_values(None, Some("C:\\Node;C:\\Windows".into())).is_ok()
+        );
+        assert_eq!(
+            path_entries_from_registry_values(Some(" ".into()), None)
+                .unwrap_err()
+                .code,
+            InstallFailureCode::PathNotVisible
+        );
     }
 }
