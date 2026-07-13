@@ -48,6 +48,12 @@
       "failed": "失敗",
       "retry": "重試",
       "diagnostics": "診斷資訊",
+      "status": {
+        "succeeded": "已安裝",
+        "failed": "失敗",
+        "installed_not_runnable": "已安裝但無法執行",
+        "skipped": "已略過"
+      },
       "failure": {
         "unsupported_platform": "不支援此平台",
         "unsupported_architecture": "不支援此 CPU 架構",

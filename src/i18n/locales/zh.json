@@ -78,6 +78,12 @@
       "failed": "失败",
       "retry": "重试",
       "diagnostics": "诊断信息",
+      "status": {
+        "succeeded": "已安装",
+        "failed": "失败",
+        "installed_not_runnable": "已安装但无法运行",
+        "skipped": "已跳过"
+      },
       "failure": {
         "unsupported_platform": "不支持此平台",
         "unsupported_architecture": "不支持此 CPU 架构",

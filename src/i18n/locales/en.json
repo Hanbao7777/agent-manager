@@ -78,6 +78,12 @@
       "failed": "Failed",
       "retry": "Retry",
       "diagnostics": "Diagnostics",
+      "status": {
+        "succeeded": "Installed",
+        "failed": "Failed",
+        "installed_not_runnable": "Installed but not runnable",
+        "skipped": "Skipped"
+      },
       "failure": {
         "unsupported_platform": "This platform is not supported",
         "unsupported_architecture": "This CPU architecture is not supported",

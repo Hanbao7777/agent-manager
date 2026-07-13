@@ -78,6 +78,12 @@
       "failed": "失敗",
       "retry": "再試行",
       "diagnostics": "診断情報",
+      "status": {
+        "succeeded": "インストール済み",
+        "failed": "失敗",
+        "installed_not_runnable": "インストール済みですが実行できません",
+        "skipped": "スキップ済み"
+      },
       "failure": {
         "unsupported_platform": "このプラットフォームはサポートされていません",
         "unsupported_architecture": "この CPU アーキテクチャはサポートされていません",

@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { CheckCircle2, LoaderCircle, XCircle } from "lucide-react";
+import {
+  CheckCircle2,
+  CircleAlert,
+  CircleMinus,
+  LoaderCircle,
+  XCircle,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -16,6 +22,7 @@ import type {
   InstallTaskSnapshot,
   RepairAction,
   ToolId,
+  ToolInstallStatus,
 } from "@/lib/api/installer";
 
 interface ToolInstallDialogProps {
@@ -31,6 +38,16 @@ interface ToolInstallDialogProps {
 const actionLabel = (action: RepairAction, t: (key: string) => string) =>
   t(`settings.installer.action.${action.kind}`);
 
+const toolStatusPresentation: Record<
+  ToolInstallStatus,
+  { icon: typeof CheckCircle2; className: string }
+> = {
+  succeeded: { icon: CheckCircle2, className: "text-green-600" },
+  failed: { icon: XCircle, className: "text-red-600" },
+  installed_not_runnable: { icon: CircleAlert, className: "text-yellow-600" },
+  skipped: { icon: CircleMinus, className: "text-muted-foreground" },
+};
+
 function FailureDetails({
   failure,
   t,
@@ -40,7 +57,6 @@ function FailureDetails({
 }) {
   return (
     <div className="mt-1 text-xs text-muted-foreground">
-      <code>{failure.code}</code>
       <p>{t(`settings.installer.failure.${failure.code}`)}</p>
       {failure.detail && (
         <>
@@ -124,26 +140,25 @@ export function ToolInstallDialog({
                 <FailureDetails failure={result.failure} t={t} />
               </div>
             )}
-            {result.tools.map((tool) => (
-              <div key={tool.tool} className="rounded border p-3 text-sm">
-                <div className="flex items-center gap-2 font-medium">
-                  {tool.status === "succeeded" ? (
-                    <CheckCircle2 className="h-4 w-4 text-green-600" />
-                  ) : (
-                    <XCircle className="h-4 w-4 text-red-600" />
+            {result.tools.map((tool) => {
+              const presentation = toolStatusPresentation[tool.status];
+              const Icon = presentation.icon;
+
+              return (
+                <div key={tool.tool} className="rounded border p-3 text-sm">
+                  <div className="flex items-center gap-2 font-medium">
+                    <Icon className={`h-4 w-4 ${presentation.className}`} />
+                    <span>{toolName(tool.tool)}</span>
+                    <span className="text-muted-foreground">
+                      {t(`settings.installer.status.${tool.status}`)}
+                    </span>
+                  </div>
+                  {tool.failure && (
+                    <FailureDetails failure={tool.failure} t={t} />
                   )}
-                  <span>{toolName(tool.tool)}</span>
-                  <span className="text-muted-foreground">
-                    {tool.status === "succeeded"
-                      ? t("settings.installer.installed")
-                      : t("settings.installer.failed")}
-                  </span>
                 </div>
-                {tool.failure && (
-                  <FailureDetails failure={tool.failure} t={t} />
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         ) : isProgress ? (
           <div className="flex items-center gap-2 rounded border p-3 text-sm">

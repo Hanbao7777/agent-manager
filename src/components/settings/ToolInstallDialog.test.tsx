@@ -2,6 +2,10 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ToolInstallDialog } from "./ToolInstallDialog";
 import type { InstallPreparation } from "@/lib/api/installer";
+import en from "@/i18n/locales/en.json";
+import ja from "@/i18n/locales/ja.json";
+import zhTW from "@/i18n/locales/zh-TW.json";
+import zh from "@/i18n/locales/zh.json";
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -11,6 +15,11 @@ vi.mock("react-i18next", () => ({
         "settings.installer.continue": "Continue",
         "settings.installer.installed": "Installed",
         "settings.installer.failed": "Failed",
+        "settings.installer.status.succeeded": "Installed",
+        "settings.installer.status.failed": "Failed",
+        "settings.installer.status.installed_not_runnable":
+          "Installed but not runnable",
+        "settings.installer.status.skipped": "Skipped",
         "settings.installer.retry": "Retry",
         "settings.installer.diagnostics": "Diagnostics",
         "settings.installer.failure.network_timeout":
@@ -34,6 +43,16 @@ const preparation: InstallPreparation = {
       },
     ],
   },
+};
+
+const keyShape = (value: unknown): unknown => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, nested]) => [key, keyShape(nested)]),
+  );
 };
 
 describe("ToolInstallDialog", () => {
@@ -121,11 +140,74 @@ describe("ToolInstallDialog", () => {
     expect(screen.getByText("Codex")).toBeInTheDocument();
     expect(screen.getByText("Gemini CLI")).toBeInTheDocument();
     expect(screen.getByText("Installed")).toBeInTheDocument();
-    expect(screen.getByText("Failed")).toBeInTheDocument();
+    expect(screen.getAllByText("Failed")).toHaveLength(1);
     expect(screen.getByText("redacted diagnostic")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(onRetry).toHaveBeenCalledOnce();
+  });
+
+  it("uses distinct labels for every tool installation status", () => {
+    render(
+      <ToolInstallDialog
+        open
+        preparation={null}
+        task={{
+          task_id: "install-1",
+          request: {
+            task_id: "install-1",
+            tools: ["claude", "codex", "gemini", "opencode"],
+            action: "install",
+          },
+          stage: "completed",
+          plan: { actions: [] },
+          cancellation_requested: false,
+          interrupted: false,
+          result: {
+            status: "needs_user_action",
+            failure: null,
+            tools: [
+              {
+                tool: "claude",
+                status: "succeeded",
+                version: "1.0.0",
+                path: null,
+                failure: null,
+              },
+              {
+                tool: "codex",
+                status: "failed",
+                version: null,
+                path: null,
+                failure: null,
+              },
+              {
+                tool: "gemini",
+                status: "installed_not_runnable",
+                version: "1.0.0",
+                path: null,
+                failure: null,
+              },
+              {
+                tool: "opencode",
+                status: "skipped",
+                version: null,
+                path: null,
+                failure: null,
+              },
+            ],
+          },
+        }}
+        toolName={(tool) => tool}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Installed")).toBeInTheDocument();
+    expect(screen.getByText("Failed")).toBeInTheDocument();
+    expect(screen.getByText("Installed but not runnable")).toBeInTheDocument();
+    expect(screen.getByText("Skipped")).toBeInTheDocument();
   });
 
   it("requires fresh consent when a dialog is reopened for another task", () => {
@@ -242,11 +324,109 @@ describe("ToolInstallDialog", () => {
       />,
     );
 
-    expect(screen.getByText("network_timeout")).toBeInTheDocument();
     expect(screen.getByText("Network request timed out")).toBeInTheDocument();
     expect(screen.getByText("Diagnostics")).toBeInTheDocument();
+    expect(screen.queryByText("network_timeout")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(onRetry).toHaveBeenCalledOnce();
+  });
+
+  it("falls back to the localized reason for a task failure without details", () => {
+    render(
+      <ToolInstallDialog
+        open
+        preparation={null}
+        task={{
+          task_id: "install-1",
+          request: { task_id: "install-1", tools: [], action: "install" },
+          stage: "completed",
+          plan: { actions: [] },
+          cancellation_requested: false,
+          interrupted: false,
+          result: {
+            status: "failed",
+            tools: [],
+            failure: {
+              code: "network_timeout",
+              stage: "repairing",
+              exit_code: null,
+              retryable: true,
+              requires_user_action: false,
+              message_key: "installer.failure",
+              recommended_action: "retry",
+              detail: null,
+            },
+          },
+        }}
+        toolName={(tool) => tool}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Network request timed out")).toBeInTheDocument();
+    expect(screen.queryByText("network_timeout")).not.toBeInTheDocument();
+  });
+
+  it("falls back to the localized reason for a tool failure without details", () => {
+    render(
+      <ToolInstallDialog
+        open
+        preparation={null}
+        task={{
+          task_id: "install-1",
+          request: {
+            task_id: "install-1",
+            tools: ["codex"],
+            action: "install",
+          },
+          stage: "completed",
+          plan: { actions: [] },
+          cancellation_requested: false,
+          interrupted: false,
+          result: {
+            status: "failed",
+            failure: null,
+            tools: [
+              {
+                tool: "codex",
+                status: "failed",
+                version: null,
+                path: null,
+                failure: {
+                  code: "network_timeout",
+                  stage: "installing_tools",
+                  exit_code: null,
+                  retryable: true,
+                  requires_user_action: false,
+                  message_key: "installer.failure",
+                  recommended_action: "retry",
+                  detail: null,
+                },
+              },
+            ],
+          },
+        }}
+        toolName={(tool) => tool}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Network request timed out")).toBeInTheDocument();
+    expect(screen.queryByText("network_timeout")).not.toBeInTheDocument();
+  });
+
+  it("keeps installer locale key sets aligned", () => {
+    expect(keyShape(ja.settings.installer)).toEqual(
+      keyShape(en.settings.installer),
+    );
+    expect(keyShape(zh.settings.installer)).toEqual(
+      keyShape(en.settings.installer),
+    );
+    expect(keyShape(zhTW.settings.installer)).toEqual(
+      keyShape(en.settings.installer),
+    );
   });
 });
