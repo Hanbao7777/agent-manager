@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use super::{
-    redact_diagnostic, InstallFailure, InstallFailureCode, InstallStage, RecommendedAction,
-    ToolInstallResult, ToolInstallStatus, ToolInstallStrategy,
+    classify_process_failure, redact_diagnostic, InstallFailure, InstallStage, ToolInstallResult,
+    ToolInstallStatus, ToolInstallStrategy,
 };
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -73,12 +73,7 @@ impl DependencyCandidates {
         selected: Option<ResolvedNodeNpmPair>,
     ) -> Result<Self, &'static str> {
         if let Some(pair) = &selected {
-            let compatible = pair.node.parent() == pair.npm.parent();
-            if pair.source.is_empty()
-                || !node.contains(&pair.node)
-                || !npm.contains(&pair.npm)
-                || !compatible
-            {
+            if pair.source.is_empty() || !node.contains(&pair.node) || !npm.contains(&pair.npm) {
                 return Err("selected Node/npm pair is not coherent");
             }
         }
@@ -150,7 +145,7 @@ pub fn verify_tool_detailed<R: ToolRunner>(
     baseline: Option<&ExecutableBaseline>,
 ) -> ToolVerification {
     let environment = runner.clean_environment();
-    let dependencies = if strategy.method == super::ToolInstallMethod::OfficialInstaller {
+    let dependencies = if strategy.dependencies.is_empty() {
         DependencyCandidates::default()
     } else {
         match runner.resolve_dependencies(&environment) {
@@ -161,7 +156,7 @@ pub fn verify_tool_detailed<R: ToolRunner>(
             }
         }
     };
-    if strategy.method == super::ToolInstallMethod::Npm
+    if !strategy.dependencies.is_empty()
         && (dependencies.node.len() != 1
             || dependencies.npm.len() != 1
             || dependencies.selected.is_none()
@@ -173,7 +168,7 @@ pub fn verify_tool_detailed<R: ToolRunner>(
             runner,
             strategy,
             environment,
-            failure("ambiguous Node/npm installations", None).unwrap(),
+            failure("ambiguous Node/npm installations", None),
         );
     }
     let environment = environment.with_dependency_paths(&dependencies.node, &dependencies.npm);
@@ -230,7 +225,7 @@ pub fn verify_tool_detailed<R: ToolRunner>(
                         ToolInstallStatus::InstalledNotRunnable,
                         version,
                         Some(path),
-                        failure(&diagnostic, output.exit_code),
+                        Some(failure(&diagnostic, output.exit_code)),
                     )
                 }
             }
@@ -241,7 +236,7 @@ pub fn verify_tool_detailed<R: ToolRunner>(
             ToolInstallStatus::InstalledNotRunnable,
             None,
             None,
-            failure("command unavailable", None),
+            Some(failure("command unavailable", None)),
         )
     };
     let baseline_match = baseline.is_some_and(|baseline| selected.as_ref() == Some(&baseline.path));
@@ -374,22 +369,12 @@ fn result(
     }
 }
 
-fn failure(detail: &str, exit_code: Option<i32>) -> Option<InstallFailure> {
-    Some(InstallFailure {
-        code: InstallFailureCode::VerificationFailure,
-        stage: InstallStage::Verifying,
-        exit_code,
-        retryable: false,
-        requires_user_action: true,
-        message_key: "installer.failure.verification".into(),
-        recommended_action: RecommendedAction::ViewDiagnostics,
-        detail: Some(redact_diagnostic(detail)),
-    })
+fn failure(detail: &str, exit_code: Option<i32>) -> InstallFailure {
+    classify_process_failure(InstallStage::Verifying, exit_code, "", detail)
 }
 
 fn normalize_error(error: InstallFailure) -> InstallFailure {
     InstallFailure {
-        code: InstallFailureCode::VerificationFailure,
         stage: InstallStage::Verifying,
         detail: error.detail.map(|detail| redact_diagnostic(&detail)),
         ..error
@@ -399,7 +384,10 @@ fn normalize_error(error: InstallFailure) -> InstallFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::installer::{tool_strategy, ToolId};
+    use crate::installer::{
+        tool_strategy, InstallFailureCode, RecommendedAction, SharedDependency, ToolId,
+        ToolInstallMethod,
+    };
     use std::{collections::HashMap, sync::Mutex};
 
     struct Fake {
@@ -563,6 +551,52 @@ mod tests {
         assert_eq!(error.code, InstallFailureCode::VerificationFailure);
         assert_eq!(error.stage, InstallStage::Verifying);
         assert!(!error.detail.unwrap().contains("secret"));
+    }
+
+    #[test]
+    fn verification_uses_process_failure_classification() {
+        let fake = fake(
+            &["C:/codex"],
+            Ok(ToolCommandOutput {
+                exit_code: Some(127),
+                stdout: String::new(),
+                stderr: "npm: command not found".into(),
+            }),
+        );
+
+        let result = verify_tool(&fake, tool_strategy(ToolId::Codex).unwrap(), None);
+        let failure = result.failure.unwrap();
+        assert_eq!(failure.code, InstallFailureCode::DependencyMissing);
+        assert_eq!(
+            failure.recommended_action,
+            RecommendedAction::RepairDependencies
+        );
+    }
+
+    #[test]
+    fn official_strategies_resolve_declared_dependencies() {
+        let fake = fake(&["C:/tool"], Ok(ToolCommandOutput::success("1.2.3")));
+        let strategy = Box::leak(Box::new(ToolInstallStrategy {
+            tool: ToolId::Claude,
+            display_name: "Test tool",
+            command_name: "tool",
+            npm_package: None,
+            dependencies: &[SharedDependency::Node, SharedDependency::Npm],
+            version_args: &["--version"],
+            method: ToolInstallMethod::OfficialInstaller,
+            fallback_npm_package: None,
+            fallback_dependencies: &[],
+            fallback_method: None,
+        }));
+
+        assert_eq!(
+            verify_tool(&fake, strategy, None).status,
+            ToolInstallStatus::Succeeded
+        );
+        assert_eq!(
+            fake.observed.lock().unwrap()[0].1,
+            vec!["resolve_dependencies".to_string()]
+        );
     }
 
     #[test]
@@ -834,8 +868,8 @@ mod tests {
     #[test]
     fn validated_pair_accessors_expose_reusable_resolution_only() {
         let pair = ResolvedNodeNpmPair {
-            node: PathBuf::from("/runtime/bin/node"),
-            npm: PathBuf::from("/runtime/bin/npm"),
+            node: PathBuf::from("/runtime/node/bin/node"),
+            npm: PathBuf::from("/runtime/npm/bin/npm"),
             source: "official_pkg",
         };
         let candidates = DependencyCandidates::new(
@@ -846,11 +880,11 @@ mod tests {
         .unwrap();
         assert_eq!(
             candidates.node_candidates(),
-            &[PathBuf::from("/runtime/bin/node")]
+            &[PathBuf::from("/runtime/node/bin/node")]
         );
         assert_eq!(
             candidates.npm_candidates(),
-            &[PathBuf::from("/runtime/bin/npm")]
+            &[PathBuf::from("/runtime/npm/bin/npm")]
         );
         assert_eq!(candidates.selected_pair(), Some(&pair));
         assert!(DependencyCandidates::new(
