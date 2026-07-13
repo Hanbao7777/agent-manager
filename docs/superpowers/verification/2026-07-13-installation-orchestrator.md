@@ -26,7 +26,7 @@ Commit under test: `b58433de` (`docs: accept installation orchestrator Task 8`)
 | `cargo check --manifest-path src-tauri/Cargo.toml` | BLOCKED | Failed before project crate compilation while compiling dependency build scripts because MSVC `link.exe` is absent. |
 | `cargo test --manifest-path src-tauri/Cargo.toml` | BLOCKED | Same missing-MSVC-linker failure before project crate compilation. |
 | `git diff --check` | PASS | No whitespace errors before evidence commit. |
-| `git status --short` | PASS | Clean before creating this evidence document; clean again is required after its commit. |
+| `git status --short` | PASS | Observed clean immediately after commit `64240df8` and at this correction's start. |
 
 Cargo reported: `error: linker 'link.exe' not found`; its MSVC target requires Visual Studio Build Tools with the Visual C++ option. This is an environment blocker, not an inferred application failure.
 
@@ -51,10 +51,40 @@ No real installer was run. The following entries are existing fake/unit coverage
 
 ## Platform Evidence Limits
 
-- Windows disposable clean VM: BLOCKED/UNEXECUTED. This Windows 10 developer workstation is not a disposable clean-install target.
-- macOS Intel: BLOCKED/UNEXECUTED. No macOS Intel environment is available to this coordinator.
-- macOS Apple Silicon: BLOCKED/UNEXECUTED. No macOS Apple Silicon environment is available to this coordinator.
-- No workflow was triggered, no push/publish occurred, and no historical CI run is claimed as validation for `b58433de`.
+No disposable Windows VM or macOS Intel/Apple Silicon host is available. No screenshots or platform logs exist because these runs were not executed; no screenshot or log path is claimed.
+
+| Platform | Required scenario | Result | Reason |
+| --- | --- | --- | --- |
+| Windows | Clean install | BLOCKED/UNEXECUTED | The available Windows 10 developer workstation is not a disposable clean-install target. |
+| Windows | UAC authorization accepted | BLOCKED/UNEXECUTED | No disposable Windows VM is available. |
+| Windows | UAC authorization declined | BLOCKED/UNEXECUTED | No disposable Windows VM is available. |
+| Windows | PATH refresh | BLOCKED/UNEXECUTED | No disposable Windows VM is available. |
+| Windows | Multiple Node installations | BLOCKED/UNEXECUTED | No disposable Windows VM is available. |
+| Windows | Proxy failure | BLOCKED/UNEXECUTED | No disposable Windows VM is available. |
+| Windows | File lock | BLOCKED/UNEXECUTED | No disposable Windows VM is available. |
+| Windows | Disk-space guard | BLOCKED/UNEXECUTED | No disposable Windows VM is available. |
+| Windows | Batch partial failure | BLOCKED/UNEXECUTED | No disposable Windows VM is available. |
+| Windows | Postflight path/version | BLOCKED/UNEXECUTED | No disposable Windows VM is available. |
+| macOS Intel | PKG authorization accepted | BLOCKED/UNEXECUTED | No macOS Intel environment is available. |
+| macOS Intel | PKG authorization declined | BLOCKED/UNEXECUTED | No macOS Intel environment is available. |
+| macOS Intel | Signature rejection | BLOCKED/UNEXECUTED | No macOS Intel environment is available. |
+| macOS Intel | GUI/zsh PATH difference | BLOCKED/UNEXECUTED | No macOS Intel environment is available. |
+| macOS Intel | `/usr/local` versus `/opt/homebrew` | BLOCKED/UNEXECUTED | No macOS Intel environment is available. |
+| macOS Intel | Root-owned npm prefix | BLOCKED/UNEXECUTED | No macOS Intel environment is available. |
+| macOS Intel | Proxy/TLS failure | BLOCKED/UNEXECUTED | No macOS Intel environment is available. |
+| macOS Intel | Batch partial failure | BLOCKED/UNEXECUTED | No macOS Intel environment is available. |
+| macOS Intel | Postflight path/version | BLOCKED/UNEXECUTED | No macOS Intel environment is available. |
+| macOS Apple Silicon | PKG authorization accepted | BLOCKED/UNEXECUTED | No macOS Apple Silicon environment is available. |
+| macOS Apple Silicon | PKG authorization declined | BLOCKED/UNEXECUTED | No macOS Apple Silicon environment is available. |
+| macOS Apple Silicon | Signature rejection | BLOCKED/UNEXECUTED | No macOS Apple Silicon environment is available. |
+| macOS Apple Silicon | GUI/zsh PATH difference | BLOCKED/UNEXECUTED | No macOS Apple Silicon environment is available. |
+| macOS Apple Silicon | `/usr/local` versus `/opt/homebrew` | BLOCKED/UNEXECUTED | No macOS Apple Silicon environment is available. |
+| macOS Apple Silicon | Root-owned npm prefix | BLOCKED/UNEXECUTED | No macOS Apple Silicon environment is available. |
+| macOS Apple Silicon | Proxy/TLS failure | BLOCKED/UNEXECUTED | No macOS Apple Silicon environment is available. |
+| macOS Apple Silicon | Batch partial failure | BLOCKED/UNEXECUTED | No macOS Apple Silicon environment is available. |
+| macOS Apple Silicon | Postflight path/version | BLOCKED/UNEXECUTED | No macOS Apple Silicon environment is available. |
+
+No workflow was triggered, no push/publish occurred, and no historical CI run is claimed as validation for `b58433de`.
 
 ## Outcome
 
