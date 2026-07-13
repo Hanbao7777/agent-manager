@@ -61,8 +61,19 @@ pub fn run() {
         )
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                window.app_handle().exit(0);
+                if window
+                    .state::<installer::InstallTaskStore>()
+                    .active_task()
+                    .is_some()
+                {
+                    api.prevent_close();
+                    let _ = window
+                        .app_handle()
+                        .emit("agent-manager://install-exit-blocked", ());
+                } else {
+                    api.prevent_close();
+                    window.app_handle().exit(0);
+                }
             }
         })
         .setup(|app| {
@@ -119,6 +130,7 @@ pub fn run() {
             installer::prepare_tool_install,
             installer::start_tool_install,
             installer::get_install_task,
+            installer::get_active_install_task,
             installer::replay_startup_install_recovery,
             installer::cancel_install_task,
         ]);

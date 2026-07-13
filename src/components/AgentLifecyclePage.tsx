@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Download,
   Copy,
@@ -21,7 +21,11 @@ import {
 } from "@/components/ui/select";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { settingsApi } from "@/lib/api";
+import { installerApi, settingsApi } from "@/lib/api";
+import type {
+  InstallPreparation,
+  InstallTaskSnapshot,
+} from "@/lib/api/installer";
 import type {
   ToolInstallation,
   ToolInstallationReport,
@@ -34,6 +38,7 @@ import { isWindows } from "@/lib/platform";
 import { isUpdateAvailable } from "@/lib/version";
 import { ToolUpgradeConfirmDialog } from "./settings/ToolUpgradeConfirmDialog";
 import { ToolInstallRow } from "./settings/ToolInstallRow";
+import { ToolInstallDialog } from "./settings/ToolInstallDialog";
 
 interface ToolVersion {
   name: string;
@@ -234,6 +239,14 @@ export function AgentLifecyclePage() {
   const [preflightTools, setPreflightTools] = useState<Set<ToolName>>(
     () => new Set(),
   );
+  const [installFlow, setInstallFlow] = useState<{
+    visible: boolean;
+    preparation: InstallPreparation | null;
+    task: InstallTaskSnapshot | null;
+    tools: ToolName[];
+  }>({ visible: false, preparation: null, task: null, tools: [] });
+  const unlistenInstallEvents = useRef<(() => void) | null>(null);
+  const unlistenExitBlocked = useRef<(() => void) | null>(null);
 
   const toolVersionByName = useMemo(() => {
     return new Map(toolVersions.map((tool) => [tool.name, tool]));
@@ -395,6 +408,90 @@ export function AgentLifecyclePage() {
       );
     }
   }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    void (async () => {
+      try {
+        unlistenInstallEvents.current = await installerApi.listenAll(
+          async (event) => {
+            try {
+              const snapshot = await installerApi.getTask(event.task_id);
+              if (disposed) return;
+              setInstallFlow({
+                visible: true,
+                preparation: null,
+                task: snapshot,
+                tools: snapshot.request.tools as ToolName[],
+              });
+              if (event.type === "finished") {
+                const reportedTools = event.result.tools.map(
+                  (tool) => tool.tool as ToolName,
+                );
+                await refreshToolVersions(reportedTools);
+                if (disposed) return;
+                if (
+                  event.result.status === "succeeded_with_conflicts" ||
+                  event.result.tools.some(
+                    (tool) => tool.status === "installed_not_runnable",
+                  )
+                ) {
+                  for (const tool of reportedTools) {
+                    void diagnoseToolSilently(tool);
+                  }
+                }
+              }
+            } catch (error) {
+              console.error(
+                "[AboutSection] Failed to apply installer event",
+                error,
+              );
+              if (!disposed) {
+                toast.error(t("settings.installer.failed"), {
+                  description: extractErrorMessage(error) || undefined,
+                  closeButton: true,
+                });
+              }
+            }
+          },
+        );
+        unlistenExitBlocked.current = await installerApi.listenExitBlocked(
+          () => {
+            if (disposed) return;
+            setInstallFlow((flow) => ({ ...flow, visible: true }));
+            toast.warning(t("settings.installer.exitBlocked"), {
+              closeButton: true,
+            });
+          },
+        );
+        const active = await installerApi.getActiveTask();
+        if (active && !disposed) {
+          setInstallFlow({
+            visible: true,
+            preparation: null,
+            task: active,
+            tools: active.request.tools as ToolName[],
+          });
+        }
+        await installerApi.replayStartupRecovery();
+      } catch (error) {
+        console.error("[AboutSection] Failed to restore installer task", error);
+        if (!disposed) {
+          toast.error(t("settings.installer.failed"), {
+            description: extractErrorMessage(error) || undefined,
+            closeButton: true,
+          });
+        }
+      }
+    })();
+    return () => {
+      disposed = true;
+      unlistenInstallEvents.current?.();
+      unlistenInstallEvents.current = null;
+      unlistenExitBlocked.current?.();
+      unlistenExitBlocked.current = null;
+    };
+  }, [diagnoseToolSilently, refreshToolVersions, t]);
 
   // 顶部按钮：一次性诊断全部 6 个工具，有冲突的写入各自卡片，
   // 全部无冲突时给一条 info toast。后端逐工具枚举所有安装并判定分歧。
@@ -625,7 +722,45 @@ export function AgentLifecyclePage() {
       });
       try {
         if (action === "install") {
-          await executeRun(toolNames, action);
+          const isNative = toolNames.every(
+            (toolName) => toolVersionByName.get(toolName)?.env_type !== "wsl",
+          );
+          if (!isNative) {
+            await executeRun(toolNames, action);
+            return;
+          }
+          try {
+            const preparation = await installerApi.prepare({
+              task_id: null,
+              tools: toolNames,
+              action,
+            });
+            setInstallFlow({
+              visible: true,
+              preparation,
+              task: null,
+              tools: toolNames,
+            });
+            if (!preparation.requires_confirmation) {
+              await installerApi.start({
+                request: {
+                  task_id: preparation.task_id,
+                  tools: toolNames,
+                  action,
+                },
+                confirmed_action_ids: [],
+              });
+            }
+          } catch (error) {
+            console.error(
+              "[AboutSection] Failed to start native install",
+              error,
+            );
+            toast.error(t("settings.installer.failed"), {
+              description: extractErrorMessage(error) || undefined,
+              closeButton: true,
+            });
+          }
           return;
         }
         let reports: ToolInstallationReport[];
@@ -651,7 +786,7 @@ export function AgentLifecyclePage() {
         });
       }
     },
-    [executeRun, preflightTools, toolActions],
+    [executeRun, preflightTools, toolActions, toolVersionByName],
   );
 
   const handleConfirmUpgrade = useCallback(() => {
@@ -663,6 +798,56 @@ export function AgentLifecyclePage() {
 
   const handleCancelUpgrade = useCallback(() => setPendingUpgrade(null), []);
 
+  const handleConfirmInstall = useCallback(
+    async (actionIds: string[]) => {
+      const preparation = installFlow.preparation;
+      if (!preparation) return;
+      try {
+        await installerApi.start({
+          request: {
+            task_id: preparation.task_id,
+            tools: installFlow.tools,
+            action: "install",
+          },
+          confirmed_action_ids: actionIds,
+        });
+      } catch (error) {
+        console.error("[AboutSection] Failed to confirm native install", error);
+        toast.error(t("settings.installer.failed"), {
+          description: extractErrorMessage(error) || undefined,
+          closeButton: true,
+        });
+      }
+    },
+    [installFlow, t],
+  );
+
+  const handleCancelInstall = useCallback(async () => {
+    const taskId =
+      installFlow.task?.task_id ?? installFlow.preparation?.task_id;
+    if (!taskId) return;
+    try {
+      await installerApi.cancel(taskId);
+    } catch (error) {
+      console.error("[AboutSection] Failed to cancel native install", error);
+      toast.error(t("settings.installer.failed"), {
+        description: extractErrorMessage(error) || undefined,
+        closeButton: true,
+      });
+    }
+  }, [installFlow, t]);
+
+  const handleRetryInstall = useCallback(() => {
+    const tools = installFlow.tools;
+    setInstallFlow({
+      visible: false,
+      preparation: null,
+      task: null,
+      tools: [],
+    });
+    void handleRunToolAction(tools, "install");
+  }, [handleRunToolAction, installFlow.tools]);
+
   // 任一安装/升级进行中（批量或单工具）即视为忙碌：用于禁用所有操作按钮，
   // 避免并发触发多个 npm/pip 全局写入造成冲突。
   // preflightTools 覆盖升级前的 probe 阶段——那段在 executeRun 之前、toolActions
@@ -670,7 +855,10 @@ export function AgentLifecyclePage() {
   const isAnyBusy =
     Boolean(batchAction) ||
     Object.keys(toolActions).length > 0 ||
-    preflightTools.size > 0;
+    preflightTools.size > 0 ||
+    Boolean(
+      installFlow.preparation || (installFlow.task && !installFlow.task.result),
+    );
 
   return (
     <motion.section
@@ -998,6 +1186,16 @@ export function AgentLifecyclePage() {
         displayName={toolDisplayName}
         onConfirm={handleConfirmUpgrade}
         onCancel={handleCancelUpgrade}
+      />
+      <ToolInstallDialog
+        open={installFlow.visible}
+        preparation={installFlow.preparation}
+        task={installFlow.task}
+        toolName={toolDisplayName}
+        onConfirm={(actionIds) => void handleConfirmInstall(actionIds)}
+        onCancel={() => void handleCancelInstall()}
+        onClose={() => setInstallFlow((flow) => ({ ...flow, visible: false }))}
+        onRetry={handleRetryInstall}
       />
     </motion.section>
   );

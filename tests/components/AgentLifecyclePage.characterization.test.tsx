@@ -6,10 +6,28 @@ const {
   getToolVersions,
   runToolLifecycleAction,
   probeToolInstallations,
+  prepareInstall,
+  startInstall,
+  getActiveInstall,
+  getInstallTask,
+  cancelInstall,
+  listenInstall,
+  replayInstall,
+  listenAllInstall,
+  listenExitBlocked,
 } = vi.hoisted(() => ({
   getToolVersions: vi.fn(),
   runToolLifecycleAction: vi.fn(),
   probeToolInstallations: vi.fn(),
+  prepareInstall: vi.fn(),
+  startInstall: vi.fn(),
+  getActiveInstall: vi.fn(),
+  getInstallTask: vi.fn(),
+  cancelInstall: vi.fn(),
+  listenInstall: vi.fn(),
+  replayInstall: vi.fn(),
+  listenAllInstall: vi.fn(),
+  listenExitBlocked: vi.fn(),
 }));
 const toastError = vi.hoisted(() => vi.fn());
 
@@ -18,6 +36,17 @@ vi.mock("@/lib/api", () => ({
     getToolVersions,
     runToolLifecycleAction,
     probeToolInstallations,
+  },
+  installerApi: {
+    prepare: prepareInstall,
+    start: startInstall,
+    getActiveTask: getActiveInstall,
+    getTask: getInstallTask,
+    cancel: cancelInstall,
+    listen: listenInstall,
+    replayStartupRecovery: replayInstall,
+    listenAll: listenAllInstall,
+    listenExitBlocked,
   },
 }));
 
@@ -52,7 +81,7 @@ const toolVersions = [
   installed_but_broken: false,
   env_type: "macos" as const,
   wsl_distro: null,
-  }));
+}));
 
 const makeToolVersions = (
   installed: Set<string> = new Set(),
@@ -85,6 +114,17 @@ describe("AgentLifecyclePage characterization", () => {
         anchored: true,
       },
     ]);
+    getActiveInstall.mockResolvedValue(null);
+    replayInstall.mockResolvedValue(0);
+    listenInstall.mockResolvedValue(vi.fn());
+    listenAllInstall.mockResolvedValue(vi.fn());
+    listenExitBlocked.mockResolvedValue(vi.fn());
+    prepareInstall.mockResolvedValue({
+      task_id: "install-1",
+      requires_confirmation: false,
+      plan: { actions: [] },
+    });
+    startInstall.mockResolvedValue("install-1");
   });
 
   it("loads all six tools through the existing version API", async () => {
@@ -106,19 +146,58 @@ describe("AgentLifecyclePage characterization", () => {
     expect(screen.getByText("Hermes")).toBeInTheDocument();
   });
 
-  it("preserves install and diagnosis calls through the existing APIs", async () => {
+  it("routes native installs through the installer API and preserves diagnosis after closing the flow", async () => {
     render(<AgentLifecyclePage />);
     const installButtons = await screen.findAllByText("settings.toolInstall");
 
     fireEvent.click(installButtons[0]);
     await waitFor(() => {
-      expect(runToolLifecycleAction).toHaveBeenCalledWith(
-        ["claude"],
-        "install",
-        {},
-      );
+      expect(prepareInstall).toHaveBeenCalledWith({
+        task_id: null,
+        tools: ["claude"],
+        action: "install",
+      });
+      expect(startInstall).toHaveBeenCalled();
     });
 
+    const completedTask = {
+      task_id: "install-1",
+      request: { task_id: "install-1", tools: ["claude"], action: "install" },
+      stage: "completed",
+      plan: { actions: [] },
+      cancellation_requested: false,
+      interrupted: false,
+      result: {
+        status: "succeeded",
+        failure: null,
+        tools: [
+          {
+            tool: "claude",
+            status: "succeeded",
+            version: "1.0.0",
+            path: "/tmp/claude",
+            failure: null,
+          },
+        ],
+      },
+    };
+    getInstallTask.mockResolvedValue(completedTask);
+    await waitFor(() => expect(listenAllInstall).toHaveBeenCalled());
+    const taskListener = listenAllInstall.mock.calls.at(-1)?.[0] as (event: {
+      type: "finished";
+      task_id: string;
+      result: unknown;
+    }) => Promise<void>;
+    await taskListener({
+      type: "finished",
+      task_id: "install-1",
+      result: completedTask.result,
+    });
+    await screen.findByText("settings.installer.result");
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() =>
+      expect(screen.getByText("settings.toolDiagnose")).not.toBeDisabled(),
+    );
     fireEvent.click(screen.getByText("settings.toolDiagnose"));
     await waitFor(() => {
       expect(probeToolInstallations).toHaveBeenCalledWith([
@@ -200,11 +279,11 @@ describe("AgentLifecyclePage characterization", () => {
 
     fireEvent.click(await screen.findByText("common.refresh"));
     await waitFor(() =>
-      expect(screen.getByText("settings.updateAllTools:{\"count\":2}")).toBeInTheDocument(),
+      expect(
+        screen.getByText('settings.updateAllTools:{"count":2}'),
+      ).toBeInTheDocument(),
     );
-    fireEvent.click(
-      screen.getByText("settings.updateAllTools:{\"count\":2}"),
-    );
+    fireEvent.click(screen.getByText('settings.updateAllTools:{"count":2}'));
 
     await waitFor(() =>
       expect(runToolLifecycleAction).toHaveBeenCalledTimes(2),
@@ -219,17 +298,21 @@ describe("AgentLifecyclePage characterization", () => {
       "update",
       {},
     ]);
-    expect(
-      runToolLifecycleAction.mock.invocationCallOrder[1],
-    ).toBeGreaterThan(runToolLifecycleAction.mock.invocationCallOrder[0]);
+    expect(runToolLifecycleAction.mock.invocationCallOrder[1]).toBeGreaterThan(
+      runToolLifecycleAction.mock.invocationCallOrder[0],
+    );
   });
 
-  it("preserves the lifecycle error toast path", async () => {
-    runToolLifecycleAction.mockRejectedValueOnce(new Error("install failed"));
+  it("opens the guided native install flow instead of the legacy executor", async () => {
     render(<AgentLifecyclePage />);
     const installButtons = await screen.findAllByText("settings.toolInstall");
 
     fireEvent.click(installButtons[0]);
-    await waitFor(() => expect(toastError).toHaveBeenCalled());
+    await waitFor(() => expect(prepareInstall).toHaveBeenCalledOnce());
+    expect(runToolLifecycleAction).not.toHaveBeenCalledWith(
+      ["claude"],
+      "install",
+      {},
+    );
   });
 });

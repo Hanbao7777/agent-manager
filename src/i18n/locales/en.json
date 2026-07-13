@@ -78,6 +78,7 @@
       "failed": "Failed",
       "retry": "Retry",
       "diagnostics": "Diagnostics",
+      "exitBlocked": "A native installer is active. The app will remain open until it finishes.",
       "status": {
         "succeeded": "Installed",
         "failed": "Failed",

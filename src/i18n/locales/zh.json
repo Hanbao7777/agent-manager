@@ -78,6 +78,7 @@
       "failed": "失败",
       "retry": "重试",
       "diagnostics": "诊断信息",
+      "exitBlocked": "本机安装程序正在运行。应用将在安装完成前保持打开。",
       "status": {
         "succeeded": "已安装",
         "failed": "失败",

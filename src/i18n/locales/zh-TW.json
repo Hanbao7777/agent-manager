@@ -48,6 +48,7 @@
       "failed": "失敗",
       "retry": "重試",
       "diagnostics": "診斷資訊",
+      "exitBlocked": "原生安裝程式正在執行。應用程式會保持開啟直到完成。",
       "status": {
         "succeeded": "已安裝",
         "failed": "失敗",

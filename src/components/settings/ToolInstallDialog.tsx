@@ -32,6 +32,7 @@ interface ToolInstallDialogProps {
   toolName: (tool: ToolId) => string;
   onConfirm: (actionIds: string[]) => void;
   onCancel: () => void;
+  onClose?: () => void;
   onRetry?: () => void;
 }
 
@@ -77,6 +78,7 @@ export function ToolInstallDialog({
   toolName,
   onConfirm,
   onCancel,
+  onClose,
   onRetry,
 }: ToolInstallDialogProps) {
   const { t } = useTranslation();
@@ -109,7 +111,7 @@ export function ToolInstallDialog({
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        if (!next) onCancel();
+        if (!next) (onClose ?? onCancel)();
       }}
     >
       <DialogContent className="max-w-md" zIndex="alert">
@@ -208,7 +210,7 @@ export function ToolInstallDialog({
                   {t("settings.installer.retry")}
                 </Button>
               )}
-              <Button onClick={onCancel}>
+              <Button onClick={onClose ?? onCancel}>
                 {t("settings.installer.close")}
               </Button>
             </>

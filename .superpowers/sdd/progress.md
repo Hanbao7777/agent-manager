@@ -16,7 +16,7 @@ Tasks:
 - Task 5: complete recovery (base `0248844c`, ledger `c65f4586`, secure-adapter corrections `1569ef50`); prior dispatch `task_e8174f0aafbb` ended in three premature worker terminations, then this revalidation added adapter-boundary coverage for LTS assets, integrity ordering, cleanup, signature/authorization failures, and PATH parsing.
 - Task 6: accepted DONE_WITH_CONCERNS at `f8dcc04d`; `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` passed, while focused Rust tests/check are blocked by unavailable MSVC `link.exe`.
 - Task 7: complete and accepted at `acddaffe`; Luna found no Gate 1 or Gate 2 blocker, and all six overall statuses plus the typed installer API, reusable dialog behaviors, contracts, and locale coverage passed review.
-- Task 8: pending
+- Task 8: implementation complete; coordinator Gate 1 and Gate 2 remain pending. Native installs use the persisted installer task flow while updates and WSL remain on the legacy executor.
 - Task 9: pending
 
 Verification notes:
@@ -28,6 +28,7 @@ Verification notes:
 - Task 5 recovery: `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`, `git diff --check`, and `git show --check 1569ef50` passed. Platform tests and `cargo check` are blocked before project compilation because local MSVC `link.exe` is unavailable.
 - Task 6: `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` passed. Focused Rust tests/check remain blocked before project compilation because MSVC `link.exe` is unavailable.
 - Task 7: Gate 1 and Gate 2 accepted at `acddaffe`; review found no blocker across all six overall statuses, prior Task 7 behaviors, API contracts, and locale coverage.
+- Task 8: direct Vitest (28 tests), `tsc --noEmit`, scoped Prettier, and direct Vite renderer build passed. `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` and `git diff --check` passed; `cargo test` and `cargo check` are blocked before project compilation because MSVC `link.exe` is unavailable.
 
 Coordination notes:
 - Task 2 completion required manual Orca lifecycle recovery because valid `worker_done` messages came from the original pane under a stale sender handle while the dispatch remained `dispatched`.

@@ -149,6 +149,8 @@ export const installerApi = {
     invoke<string>("start_tool_install", { request }),
   getTask: (taskId: string) =>
     invoke<InstallTaskSnapshot>("get_install_task", { taskId }),
+  getActiveTask: () =>
+    invoke<InstallTaskSnapshot | null>("get_active_install_task"),
   cancel: (taskId: string) => invoke<void>("cancel_install_task", { taskId }),
   replayStartupRecovery: () =>
     invoke<number>("replay_startup_install_recovery"),
@@ -159,4 +161,10 @@ export const installerApi = {
     listen<InstallTaskEvent>(eventName, ({ payload }) => {
       if (payload.task_id === taskId) handler(payload);
     }),
+  listenAll: (
+    handler: (event: InstallTaskEvent) => void,
+  ): Promise<UnlistenFn> =>
+    listen<InstallTaskEvent>(eventName, ({ payload }) => handler(payload)),
+  listenExitBlocked: (handler: () => void): Promise<UnlistenFn> =>
+    listen("agent-manager://install-exit-blocked", handler),
 };

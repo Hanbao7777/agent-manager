@@ -33,6 +33,7 @@ describe("installerApi", () => {
       confirmed_action_ids: ["install-node"],
     });
     await installerApi.getTask("install-1");
+    await installerApi.getActiveTask();
     await installerApi.cancel("install-1");
     await installerApi.replayStartupRecovery();
 
@@ -45,11 +46,12 @@ describe("installerApi", () => {
     expect(tauri.invoke).toHaveBeenNthCalledWith(3, "get_install_task", {
       taskId: "install-1",
     });
-    expect(tauri.invoke).toHaveBeenNthCalledWith(4, "cancel_install_task", {
+    expect(tauri.invoke).toHaveBeenNthCalledWith(4, "get_active_install_task");
+    expect(tauri.invoke).toHaveBeenNthCalledWith(5, "cancel_install_task", {
       taskId: "install-1",
     });
     expect(tauri.invoke).toHaveBeenNthCalledWith(
-      5,
+      6,
       "replay_startup_install_recovery",
     );
   });

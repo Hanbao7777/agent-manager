@@ -111,6 +111,13 @@ pub fn get_install_task(
         .ok_or_else(|| "unknown install task".to_string())
 }
 
+#[tauri::command]
+pub fn get_active_install_task(
+    store: tauri::State<'_, InstallTaskStore>,
+) -> Option<InstallTaskSnapshot> {
+    store.active_task()
+}
+
 /// Frontend listeners call this after subscribing to installation events so
 /// recovered terminal state cannot be lost during Tauri application setup.
 #[tauri::command]

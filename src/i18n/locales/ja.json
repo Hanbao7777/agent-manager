@@ -78,6 +78,7 @@
       "failed": "失敗",
       "retry": "再試行",
       "diagnostics": "診断情報",
+      "exitBlocked": "ネイティブインストーラーが実行中です。完了するまでアプリは開いたままになります。",
       "status": {
         "succeeded": "インストール済み",
         "failed": "失敗",
