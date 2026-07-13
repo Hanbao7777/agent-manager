@@ -150,6 +150,8 @@ export const installerApi = {
   getTask: (taskId: string) =>
     invoke<InstallTaskSnapshot>("get_install_task", { taskId }),
   cancel: (taskId: string) => invoke<void>("cancel_install_task", { taskId }),
+  replayStartupRecovery: () =>
+    invoke<number>("replay_startup_install_recovery"),
   listen: async (
     taskId: string,
     handler: (event: InstallTaskEvent) => void,

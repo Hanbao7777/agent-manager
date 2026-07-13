@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { CheckCircle2, LoaderCircle, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -49,6 +49,10 @@ export function ToolInstallDialog({
     !preparation?.requires_confirmation ||
     required.every((action) => approved.includes(action.id));
 
+  useEffect(() => {
+    setApproved([]);
+  }, [open, preparation?.task_id, task?.task_id]);
+
   const toggle = (id: string) =>
     setApproved((current) =>
       current.includes(id)
@@ -82,6 +86,17 @@ export function ToolInstallDialog({
         </DialogHeader>
         {result ? (
           <div className="space-y-2">
+            {result.failure?.detail && (
+              <div className="rounded border border-red-500/20 bg-red-500/5 p-3 text-sm">
+                <div className="flex items-center gap-2 font-medium">
+                  <XCircle className="h-4 w-4 text-red-600" />
+                  {t("settings.installer.failed")}
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {result.failure.detail}
+                </p>
+              </div>
+            )}
             {result.tools.map((tool) => (
               <div key={tool.tool} className="rounded border p-3 text-sm">
                 <div className="flex items-center gap-2 font-medium">

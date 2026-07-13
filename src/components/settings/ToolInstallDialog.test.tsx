@@ -117,4 +117,82 @@ describe("ToolInstallDialog", () => {
     expect(screen.getByText("Failed")).toBeInTheDocument();
     expect(screen.getByText("redacted diagnostic")).toBeInTheDocument();
   });
+
+  it("requires fresh consent when a dialog is reopened for another task", () => {
+    const onConfirm = vi.fn();
+    const { rerender } = render(
+      <ToolInstallDialog
+        open
+        preparation={preparation}
+        task={null}
+        toolName={(tool) => tool}
+        onConfirm={onConfirm}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("checkbox"));
+    expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled();
+
+    rerender(
+      <ToolInstallDialog
+        open={false}
+        preparation={preparation}
+        task={null}
+        toolName={(tool) => tool}
+        onConfirm={onConfirm}
+        onCancel={vi.fn()}
+      />,
+    );
+    rerender(
+      <ToolInstallDialog
+        open
+        preparation={{ ...preparation, task_id: "install-2" }}
+        task={null}
+        toolName={(tool) => tool}
+        onConfirm={onConfirm}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
+  });
+
+  it("renders a task-level failure when no tool result exists", () => {
+    render(
+      <ToolInstallDialog
+        open
+        preparation={null}
+        task={{
+          task_id: "install-1",
+          request: { task_id: "install-1", tools: [], action: "install" },
+          stage: "completed",
+          plan: { actions: [] },
+          cancellation_requested: false,
+          interrupted: true,
+          result: {
+            status: "failed",
+            tools: [],
+            failure: {
+              code: "installer_failure",
+              stage: "repairing",
+              exit_code: null,
+              retryable: true,
+              requires_user_action: true,
+              message_key: "installer.failure",
+              recommended_action: "retry",
+              detail: "interrupted before installing tools",
+            },
+          },
+        }}
+        toolName={(tool) => tool}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText("interrupted before installing tools"),
+    ).toBeInTheDocument();
+  });
 });
