@@ -32,6 +32,36 @@
     "installCommandsCopied": "安裝命令已複製",
     "installCommandsCopyFailed": "複製失敗，請手動複製。",
     "localEnvCheck": "本地環境檢查",
-    "oneClickInstallHint": "安裝 Claude Code / Codex / Gemini CLI / OpenCode"
+    "oneClickInstallHint": "安裝 Claude Code / Codex / Gemini CLI / OpenCode",
+    "installer": {
+      "title": "修復安裝",
+      "preflightHint": "繼續前請檢查所需修復。",
+      "progress": "正在安裝工具",
+      "progressHint": "安裝正在進行。",
+      "result": "安裝結果",
+      "resultHint": "查看每個工具的結果。",
+      "administrator": "需要管理員權限",
+      "continue": "繼續",
+      "cancel": "取消安裝",
+      "close": "關閉",
+      "installed": "已安裝",
+      "failed": "失敗",
+      "action": {
+        "install_node": "安裝 Node.js",
+        "upgrade_node": "升級 Node.js",
+        "repair_node": "修復 Node.js",
+        "refresh_environment": "重新整理環境",
+        "install_npm": "安裝 npm",
+        "update_path": "更新 PATH"
+      },
+      "stage": {
+        "preflight": "正在檢查需求",
+        "awaiting_confirmation": "等待確認",
+        "repairing": "正在修復相依項目",
+        "installing_tools": "正在安裝工具",
+        "verifying": "正在驗證安裝",
+        "completed": "已完成"
+      }
+    }
   }
 }

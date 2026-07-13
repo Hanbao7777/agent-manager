@@ -62,6 +62,36 @@
     "toolUpgradeWillRun": "Will run:",
     "toolUpgradeConfirmBtn": "Confirm upgrade",
     "toolConflictNotRunnable": "can't run",
-    "toolConflictDefault": "Default"
+    "toolConflictDefault": "Default",
+    "installer": {
+      "title": "Repair installation",
+      "preflightHint": "Review required repairs before continuing.",
+      "progress": "Installing tools",
+      "progressHint": "Installation is in progress.",
+      "result": "Installation result",
+      "resultHint": "Review each tool result.",
+      "administrator": "Administrator permission required",
+      "continue": "Continue",
+      "cancel": "Cancel installation",
+      "close": "Close",
+      "installed": "Installed",
+      "failed": "Failed",
+      "action": {
+        "install_node": "Install Node.js",
+        "upgrade_node": "Upgrade Node.js",
+        "repair_node": "Repair Node.js",
+        "refresh_environment": "Refresh environment",
+        "install_npm": "Install npm",
+        "update_path": "Update PATH"
+      },
+      "stage": {
+        "preflight": "Checking requirements",
+        "awaiting_confirmation": "Awaiting confirmation",
+        "repairing": "Repairing dependencies",
+        "installing_tools": "Installing tools",
+        "verifying": "Verifying installation",
+        "completed": "Completed"
+      }
+    }
   }
 }

@@ -62,6 +62,36 @@
     "toolUpgradeWillRun": "実行内容：",
     "toolUpgradeConfirmBtn": "アップグレードを実行",
     "toolConflictNotRunnable": "実行不可",
-    "toolConflictDefault": "既定"
+    "toolConflictDefault": "既定",
+    "installer": {
+      "title": "インストールを修復",
+      "preflightHint": "続行する前に必要な修復を確認してください。",
+      "progress": "ツールをインストール中",
+      "progressHint": "インストールを実行しています。",
+      "result": "インストール結果",
+      "resultHint": "各ツールの結果を確認してください。",
+      "administrator": "管理者権限が必要です",
+      "continue": "続行",
+      "cancel": "インストールを中止",
+      "close": "閉じる",
+      "installed": "インストール済み",
+      "failed": "失敗",
+      "action": {
+        "install_node": "Node.js をインストール",
+        "upgrade_node": "Node.js をアップグレード",
+        "repair_node": "Node.js を修復",
+        "refresh_environment": "環境を更新",
+        "install_npm": "npm をインストール",
+        "update_path": "PATH を更新"
+      },
+      "stage": {
+        "preflight": "要件を確認中",
+        "awaiting_confirmation": "確認待ち",
+        "repairing": "依存関係を修復中",
+        "installing_tools": "ツールをインストール中",
+        "verifying": "インストールを検証中",
+        "completed": "完了"
+      }
+    }
   }
 }

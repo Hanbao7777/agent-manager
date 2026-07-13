@@ -62,6 +62,36 @@
     "toolUpgradeWillRun": "将执行：",
     "toolUpgradeConfirmBtn": "确认升级",
     "toolConflictNotRunnable": "无法运行",
-    "toolConflictDefault": "默认"
+    "toolConflictDefault": "默认",
+    "installer": {
+      "title": "修复安装",
+      "preflightHint": "继续前请检查所需修复。",
+      "progress": "正在安装工具",
+      "progressHint": "安装正在进行。",
+      "result": "安装结果",
+      "resultHint": "查看每个工具的结果。",
+      "administrator": "需要管理员权限",
+      "continue": "继续",
+      "cancel": "取消安装",
+      "close": "关闭",
+      "installed": "已安装",
+      "failed": "失败",
+      "action": {
+        "install_node": "安装 Node.js",
+        "upgrade_node": "升级 Node.js",
+        "repair_node": "修复 Node.js",
+        "refresh_environment": "刷新环境",
+        "install_npm": "安装 npm",
+        "update_path": "更新 PATH"
+      },
+      "stage": {
+        "preflight": "正在检查要求",
+        "awaiting_confirmation": "等待确认",
+        "repairing": "正在修复依赖",
+        "installing_tools": "正在安装工具",
+        "verifying": "正在验证安装",
+        "completed": "已完成"
+      }
+    }
   }
 }
