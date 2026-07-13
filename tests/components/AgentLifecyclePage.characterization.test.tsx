@@ -29,11 +29,14 @@ const {
   listenAllInstall: vi.fn(),
   listenExitBlocked: vi.fn(),
 }));
-const { toastSuccess, toastError, toastWarning } = vi.hoisted(() => ({
-  toastSuccess: vi.fn(),
-  toastError: vi.fn(),
-  toastWarning: vi.fn(),
-}));
+const { toastSuccess, toastError, toastWarning, toastInfo } = vi.hoisted(
+  () => ({
+    toastSuccess: vi.fn(),
+    toastError: vi.fn(),
+    toastWarning: vi.fn(),
+    toastInfo: vi.fn(),
+  }),
+);
 const translate = vi.hoisted(
   () => (key: string, values?: Record<string, unknown>) =>
     values ? `${key}:${JSON.stringify(values)}` : key,
@@ -69,7 +72,7 @@ vi.mock("sonner", () => ({
     success: toastSuccess,
     error: toastError,
     warning: toastWarning,
-    info: vi.fn(),
+    info: toastInfo,
   },
 }));
 
@@ -340,6 +343,141 @@ describe("AgentLifecyclePage characterization", () => {
 
     expect(toastSuccess).not.toHaveBeenCalled();
     expect(toastWarning).not.toHaveBeenCalled();
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("keeps privileged preparation available when a stage snapshot resolves", async () => {
+    let resolveTask!: (task: unknown) => void;
+    const taskSnapshot = new Promise<unknown>((resolve) => {
+      resolveTask = resolve;
+    });
+    prepareInstall.mockResolvedValue({
+      task_id: "install-1",
+      requires_confirmation: true,
+      plan: {
+        actions: [
+          {
+            id: "install-node",
+            kind: "install_node",
+            requires_confirmation: true,
+            requires_elevation: true,
+            status: "pending",
+          },
+        ],
+      },
+    });
+    getInstallTask.mockReturnValue(taskSnapshot);
+    render(<AgentLifecyclePage />);
+    const installButtons = await screen.findAllByText("settings.toolInstall");
+
+    fireEvent.click(installButtons[0]);
+    await screen.findByRole("checkbox");
+    const listener = listenAllInstall.mock.calls[0][0] as (
+      event: unknown,
+    ) => Promise<void>;
+    const applyEvent = listener({
+      type: "stage_changed",
+      task_id: "install-1",
+      stage: "awaiting_confirmation",
+    });
+    await waitFor(() =>
+      expect(getInstallTask).toHaveBeenCalledWith("install-1"),
+    );
+    resolveTask({
+      task_id: "install-1",
+      request: { task_id: "install-1", tools: ["claude"], action: "install" },
+      stage: "awaiting_confirmation",
+      plan: { actions: [] },
+      result: null,
+      cancellation_requested: false,
+      interrupted: false,
+    });
+    await applyEvent;
+
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByText("settings.installer.continue"));
+    await waitFor(() =>
+      expect(startInstall).toHaveBeenCalledWith({
+        request: {
+          task_id: "install-1",
+          tools: ["claude"],
+          action: "install",
+        },
+        confirmed_action_ids: ["install-node"],
+      }),
+    );
+  });
+
+  it("does not finish a bulk diagnostic after unmount", async () => {
+    let resolveDiagnosis!: (reports: unknown[]) => void;
+    const diagnosis = new Promise<unknown[]>((resolve) => {
+      resolveDiagnosis = resolve;
+    });
+    probeToolInstallations.mockReturnValue(diagnosis);
+    const view = render(<AgentLifecyclePage />);
+
+    fireEvent.click(await screen.findByText("settings.toolDiagnose"));
+    await waitFor(() =>
+      expect(probeToolInstallations).toHaveBeenCalledWith([
+        "claude",
+        "codex",
+        "gemini",
+        "opencode",
+        "openclaw",
+        "hermes",
+      ]),
+    );
+    view.unmount();
+    resolveDiagnosis([]);
+    await diagnosis;
+
+    expect(toastInfo).not.toHaveBeenCalled();
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("does not finish a bulk refresh after unmount", async () => {
+    let resolveRefresh!: (versions: typeof toolVersions) => void;
+    const refresh = new Promise<typeof toolVersions>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    const view = render(<AgentLifecyclePage />);
+    await waitFor(() =>
+      expect(screen.getAllByText("common.notInstalled")).toHaveLength(6),
+    );
+    getToolVersions.mockClear();
+    getToolVersions.mockReturnValue(refresh);
+
+    fireEvent.click(screen.getByText("common.refresh"));
+    await waitFor(() => expect(getToolVersions).toHaveBeenCalledTimes(6));
+    view.unmount();
+    resolveRefresh(toolVersions);
+    await refresh;
+
+    expect(toastSuccess).not.toHaveBeenCalled();
+    expect(toastWarning).not.toHaveBeenCalled();
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("does not continue native preparation after unmount", async () => {
+    let resolvePreparation!: (preparation: unknown) => void;
+    const preparation = new Promise<unknown>((resolve) => {
+      resolvePreparation = resolve;
+    });
+    prepareInstall.mockReturnValue(preparation);
+    const view = render(<AgentLifecyclePage />);
+    const installButtons = await screen.findAllByText("settings.toolInstall");
+
+    fireEvent.click(installButtons[0]);
+    await waitFor(() => expect(prepareInstall).toHaveBeenCalledOnce());
+    view.unmount();
+    resolvePreparation({
+      task_id: "install-1",
+      requires_confirmation: false,
+      plan: { actions: [] },
+    });
+    await preparation;
+
+    expect(startInstall).not.toHaveBeenCalled();
     expect(toastError).not.toHaveBeenCalled();
   });
 

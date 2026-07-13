@@ -324,7 +324,7 @@ export function AgentLifecyclePage() {
         Date.now() - toolVersionsCache.at < TOOL_VERSIONS_CACHE_TTL_MS
       ) {
         setToolVersions(toolVersionsCache.data);
-        setIsLoadingTools(false);
+        if (mounted.current) setIsLoadingTools(false);
         return;
       }
       setIsLoadingTools(true);
@@ -344,7 +344,7 @@ export function AgentLifecyclePage() {
         if (toolVersionsCache) {
           toolVersionsCache = { ...toolVersionsCache, at: Date.now() };
         }
-        setIsLoadingTools(false);
+        if (mounted.current) setIsLoadingTools(false);
       }
     },
     [wslShellByTool, refreshToolVersions],
@@ -433,11 +433,16 @@ export function AgentLifecyclePage() {
             const snapshot = await installerApi.getTask(event.task_id);
             if (disposed) return;
             activeInstallTaskId.current = snapshot.task_id;
-            setInstallFlow({
-              visible: true,
-              preparation: null,
-              task: snapshot,
-              tools: snapshot.request.tools as ToolName[],
+            setInstallFlow((flow) => {
+              if (flow.preparation?.requires_confirmation && !snapshot.result) {
+                return flow;
+              }
+              return {
+                visible: true,
+                preparation: null,
+                task: snapshot,
+                tools: snapshot.request.tools as ToolName[],
+              };
             });
             if (event.type === "finished") {
               const reportedTools = event.result.tools.map(
@@ -543,6 +548,7 @@ export function AgentLifecyclePage() {
     setIsDiagnosingAll(true);
     try {
       const reports = await settingsApi.probeToolInstallations([...TOOL_NAMES]);
+      if (!mounted.current) return;
       const next: Partial<Record<ToolName, ToolInstallation[]>> = {};
       let conflicts = 0;
       for (const report of reports) {
@@ -556,13 +562,14 @@ export function AgentLifecyclePage() {
         toast.info(t("settings.toolDiagnoseNoConflict"), { closeButton: true });
       }
     } catch (error) {
+      if (!mounted.current) return;
       console.error("[AboutSection] Diagnose all failed", error);
       toast.error(t("settings.toolDiagnoseFailed"), {
         description: extractErrorMessage(error) || undefined,
         closeButton: true,
       });
     } finally {
-      setIsDiagnosingAll(false);
+      if (mounted.current) setIsDiagnosingAll(false);
     }
   }, [t]);
 
@@ -779,6 +786,7 @@ export function AgentLifecyclePage() {
               tools: toolNames,
               action,
             });
+            if (!mounted.current) return;
             setInstallFlow({
               visible: true,
               preparation,
@@ -787,6 +795,7 @@ export function AgentLifecyclePage() {
             });
             activeInstallTaskId.current = preparation.task_id;
             if (!preparation.requires_confirmation) {
+              if (!mounted.current) return;
               await installerApi.start({
                 request: {
                   task_id: preparation.task_id,
@@ -797,6 +806,7 @@ export function AgentLifecyclePage() {
               });
             }
           } catch (error) {
+            if (!mounted.current) return;
             console.error(
               "[AboutSection] Failed to start native install",
               error,
@@ -824,6 +834,7 @@ export function AgentLifecyclePage() {
         }
         setPendingUpgrade({ toolNames, plans: needConfirm });
       } finally {
+        if (!mounted.current) return;
         setPreflightTools((prev) => {
           const next = new Set(prev);
           toolNames.forEach((name) => next.delete(name));
