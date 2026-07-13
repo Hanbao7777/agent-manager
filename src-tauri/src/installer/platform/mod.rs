@@ -30,6 +30,29 @@ pub struct CommandSpec {
     pub args: Vec<String>,
 }
 
+/// Owns a per-install temporary directory and removes it on every return path.
+pub struct TaskTempGuard {
+    path: PathBuf,
+}
+
+impl TaskTempGuard {
+    pub fn new(path: PathBuf) -> Result<Self, InstallFailure> {
+        fs::create_dir_all(&path)
+            .map_err(|error| failure(InstallFailureCode::PermissionDenied, &error.to_string()))?;
+        Ok(Self { path })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TaskTempGuard {
+    fn drop(&mut self) {
+        cleanup_task_temp(&self.path);
+    }
+}
+
 pub trait PlatformAdapter {
     fn platform(&self) -> Platform;
     fn asset_name(&self, version: &str, architecture: Architecture) -> Option<String>;
@@ -58,7 +81,7 @@ pub fn resolve_node_release(
     })?;
     let mut selected: Option<(u64, String, String)> = None;
     for row in rows {
-        if matches!(row.get("lts"), None | Some(serde_json::Value::Bool(false))) {
+        if !matches!(row.get("lts"), Some(serde_json::Value::String(value)) if !value.is_empty()) {
             continue;
         }
         let version = match row.get("version").and_then(serde_json::Value::as_str) {
@@ -88,10 +111,10 @@ pub fn resolve_node_release(
         {
             continue;
         }
-        if selected.as_ref().is_none_or(|(current, _, _)| {
-            major > *current
-                || (major == *current && version > selected.as_ref().unwrap().1.as_str())
-        }) {
+        if selected
+            .as_ref()
+            .is_none_or(|(_, current, _)| version_key(version) > version_key(current))
+        {
             selected = Some((major, version.to_string(), asset_name));
         }
     }
@@ -109,6 +132,18 @@ pub fn resolve_node_release(
         checksums_url: format!("{base}/SHASUMS256.txt"),
         asset_name,
     })
+}
+
+fn version_key(version: &str) -> (u64, u64, u64) {
+    let mut values = version
+        .trim_start_matches('v')
+        .split('.')
+        .map(|part| part.parse().unwrap_or(0));
+    (
+        values.next().unwrap_or(0),
+        values.next().unwrap_or(0),
+        values.next().unwrap_or(0),
+    )
 }
 
 pub async fn fetch_node_index() -> Result<String, InstallFailure> {
@@ -180,6 +215,20 @@ pub async fn download_and_verify_node(
     Ok(package)
 }
 
+pub async fn install_node_release(
+    adapter: &dyn PlatformAdapter,
+    release: &NodeRelease,
+    task_temp: PathBuf,
+) -> Result<(), InstallFailure> {
+    let temp = TaskTempGuard::new(task_temp)?;
+    let package = download_and_verify_node(release, temp.path()).await?;
+    install_node(adapter, &package)
+}
+
+pub fn cleanup_task_temp(task_temp: &Path) {
+    let _ = fs::remove_dir_all(task_temp);
+}
+
 pub fn checksum_for_asset(checksums: &str, asset_name: &str) -> Option<String> {
     checksums.lines().find_map(|line| {
         let mut fields = line.split_whitespace();
@@ -221,15 +270,34 @@ pub fn selected_node_npm_pair(
     ResolvedNodeNpmPair { node, npm, source }
 }
 
+pub fn selected_environment(
+    environment: &CleanEnvironment,
+    pair: &ResolvedNodeNpmPair,
+) -> CleanEnvironment {
+    environment.with_dependency_paths(&[pair.node.clone()], &[pair.npm.clone()])
+}
+
 fn run_checked(command: CommandSpec, code: InstallFailureCode) -> Result<(), InstallFailure> {
-    let status = std::process::Command::new(&command.program)
+    let output = std::process::Command::new(&command.program)
         .args(&command.args)
-        .status()
+        .output()
         .map_err(|error| failure(code.clone(), &error.to_string()))?;
-    if status.success() {
+    if output.status.success() {
         Ok(())
     } else {
-        Err(failure(code, "platform installer command failed"))
+        let classified = crate::installer::classify_process_failure(
+            InstallStage::Repairing,
+            output.status.code(),
+            &String::from_utf8_lossy(&output.stdout),
+            &String::from_utf8_lossy(&output.stderr),
+        );
+        if classified.code == InstallFailureCode::PrivilegeDeclined
+            || classified.code == InstallFailureCode::SignatureVerificationFailure
+        {
+            Err(classified)
+        } else {
+            Err(failure(code, "platform installer command failed"))
+        }
     }
 }
 
@@ -308,5 +376,20 @@ mod tests {
         assert!(
             checksum_for_asset(&format!("{}  other.msi", "a".repeat(64)), "node-v24.msi").is_none()
         );
+    }
+
+    #[test]
+    fn numeric_version_ordering_does_not_use_lexical_minor_order() {
+        assert!(version_key("v24.10.0") > version_key("v24.9.0"));
+    }
+
+    #[test]
+    fn task_temp_guard_cleans_success_and_failure_paths() {
+        let path = std::env::temp_dir().join(format!("installer-test-{}", std::process::id()));
+        {
+            let guard = TaskTempGuard::new(path.clone()).unwrap();
+            fs::write(guard.path().join("artifact"), b"temporary").unwrap();
+        }
+        assert!(!path.exists());
     }
 }

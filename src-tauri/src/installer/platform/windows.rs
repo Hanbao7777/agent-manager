@@ -27,12 +27,54 @@ impl PlatformAdapter for WindowsAdapter {
         msiexec_command(package)
     }
     fn refresh_clean_environment(&self) -> Result<CleanEnvironment, InstallFailure> {
-        Ok(CleanEnvironment::default())
+        Ok(CleanEnvironment {
+            path_entries: refreshed_path_entries(),
+        })
     }
 }
 
+#[cfg(target_os = "windows")]
+fn refreshed_path_entries() -> Vec<std::path::PathBuf> {
+    use winreg::{enums::*, RegKey};
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let user = hkcu
+        .open_subkey("Environment")
+        .ok()
+        .and_then(|key| key.get_value::<String, _>("Path").ok());
+    let system = hklm
+        .open_subkey(r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment")
+        .ok()
+        .and_then(|key| key.get_value::<String, _>("Path").ok());
+    let joined = [user, system]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(";");
+    std::env::split_paths(std::ffi::OsStr::new(&joined)).collect()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn refreshed_path_entries() -> Vec<std::path::PathBuf> {
+    std::env::var_os("PATH")
+        .map(|value| std::env::split_paths(&value).collect())
+        .unwrap_or_default()
+}
+
+pub const AUTHENTICODE_SCRIPT: &str =
+    "& { param([string]$path) $sig = Get-AuthenticodeSignature -LiteralPath $path; if ($sig.Status -ne 'Valid') { Write-Error $sig.Status; exit 1 } }";
+
 pub fn authenticode_command(package: &Path) -> CommandSpec {
-    CommandSpec { program: "powershell.exe".into(), args: vec!["-NoProfile".into(), "-NonInteractive".into(), "-Command".into(), format!("if ((Get-AuthenticodeSignature -LiteralPath '{}').Status -ne 'Valid') {{ exit 1 }}", package.to_string_lossy().replace('\'', "''"))] }
+    CommandSpec {
+        program: "powershell.exe".into(),
+        args: vec![
+            "-NoProfile".into(),
+            "-NonInteractive".into(),
+            "-Command".into(),
+            AUTHENTICODE_SCRIPT.into(),
+            package.to_string_lossy().into_owned(),
+        ],
+    }
 }
 pub fn msiexec_command(package: &Path) -> CommandSpec {
     CommandSpec {
@@ -54,5 +96,12 @@ mod tests {
         let path = Path::new(r"C:\a b\node.msi");
         assert_eq!(msiexec_command(path).args[1], path.to_string_lossy());
         assert!(authenticode_command(path).args[3].contains("-LiteralPath"));
+    }
+
+    #[test]
+    fn authenticode_uses_fixed_script_and_hostile_path_argument() {
+        let command = authenticode_command(Path::new(r"C:\a;$(whoami)\node.msi"));
+        assert_eq!(command.args[3], AUTHENTICODE_SCRIPT);
+        assert_eq!(command.args[4], r"C:\a;$(whoami)\node.msi");
     }
 }

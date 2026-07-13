@@ -10,8 +10,9 @@ pub mod verifier;
 pub use failure::{classify_process_failure, redact_diagnostic};
 pub use model::*;
 pub use platform::{
-    download_and_verify_node, install_node, refresh_environment, resolve_node_release, NodeRelease,
-    PlatformAdapter,
+    cleanup_task_temp, download_and_verify_node, install_node, install_node_release,
+    refresh_environment, resolve_node_release, selected_environment, NodeRelease, PlatformAdapter,
+    TaskTempGuard,
 };
 pub use policy::{node_policy, NodePolicy};
 pub use probe::{CommandProbe, ProbeConfig, ProbeRunner, SystemProbe};
