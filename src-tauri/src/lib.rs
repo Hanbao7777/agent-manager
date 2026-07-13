@@ -1,4 +1,5 @@
 mod commands;
+pub(crate) mod installer;
 #[cfg(target_os = "linux")]
 mod linux_fix;
 mod panic_hook;
