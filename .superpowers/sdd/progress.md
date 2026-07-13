@@ -12,7 +12,7 @@ Tasks:
 - Task 1: complete (commits 05f653eb..99383740, review clean)
 - Task 2: complete (commit `ca2a47b5`, passed spec and quality review)
 - Task 3: complete (commit `970faaf1`, passed spec and quality review)
-- Task 4: pending
+- Task 4: complete recovery (`task_d8843c61c323`; commits `19a67d49`, `3bbce1bb`, and `7991c6f5`; review ledger follows in this commit)
 - Task 5: pending
 - Task 6: pending
 - Task 7: pending
@@ -20,9 +20,12 @@ Tasks:
 - Task 9: pending
 
 Verification notes:
+- Controller requirement `msg_00ea4a5e8af9` is mandatory from Task 4 onward: macOS Finder/GUI PATH must not rely on bare `npm` or a hard-coded `/opt/homebrew/bin`; dynamically resolve a coherent Node/npm installation and reuse the same explicit paths/environment for detection, repair, installation, and postflight verification. Ensure npm's matching Node is reachable for its shebang, do not silently choose among ambiguous installations, and cover representative Apple/Intel Homebrew, official package, nvm/fnm/Volta/mise-style locations plus missing-GUI-PATH and multi-install regressions. Task 4 owns the resolver/verifier contract, Tasks 5-6 own platform/orchestrator propagation, and Task 9 owns full regression/platform evidence.
 - Task 2: `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` and `git diff --check` passed.
 - Task 2 focused Rust tests are blocked locally before project compilation because MSVC `link.exe` is unavailable; Windows/macOS workflow evidence is required.
 - Task 3: formatter, diff, and scope checks passed. Focused probe, repair, and legacy misc test attempts are blocked before project compilation by the same missing MSVC linker.
+- Task 4: `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`, `git diff --check`, and `git show --check` passed. Focused verifier tests remain blocked before project compilation because MSVC `link.exe` is unavailable.
+- Task 4: `opencode-ai` remains the repository's established OpenCode fallback package contract from `commands/misc.rs`. No CI rerun was attempted because the recorded Windows/macOS workflow failures are account billing or spending-limit failures before job execution.
 - Task 2 platform runs `29262339132` (Windows) and `29262341594` (macOS) failed before any job step because GitHub reported failed account payments or an insufficient spending limit. No platform compile/test evidence was produced; do not rerun until billing is restored.
 
 Coordination notes:
