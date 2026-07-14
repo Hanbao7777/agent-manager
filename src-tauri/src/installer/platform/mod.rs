@@ -424,10 +424,10 @@ mod tests {
     }
     #[test]
     fn checksum_requires_exact_asset() {
+        let checksum = "a".repeat(64);
         assert_eq!(
-            checksum_for_asset(&format!("{}  node-v24.msi", "a".repeat(64)), "node-v24.msi")
-                .as_deref(),
-            Some(&"a".repeat(64))
+            checksum_for_asset(&format!("{checksum}  node-v24.msi"), "node-v24.msi").as_deref(),
+            Some(checksum.as_str())
         );
         assert!(
             checksum_for_asset(&format!("{}  other.msi", "a".repeat(64)), "node-v24.msi").is_none()

@@ -140,7 +140,9 @@ pub fn tool_id(strategy: &ToolInstallStrategy) -> ToolId {
 
 #[cfg(test)]
 mod tests {
-    use super::{tool_strategy, SharedDependency, ToolId, ToolInstallMethod};
+    use super::{
+        tool_strategy, SharedDependency, ToolId, ToolInstallMethod, ToolInstallStrategy, ToolKey,
+    };
 
     #[test]
     fn codex_strategy_declares_node_and_npm() {
