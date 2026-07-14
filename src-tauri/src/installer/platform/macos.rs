@@ -42,9 +42,13 @@ impl PlatformAdapter for MacosAdapter {
 
 fn login_shell() -> PathBuf {
     std::env::var_os("SHELL")
-        .filter(|shell| Path::new(shell).is_absolute())
+        .filter(|shell| is_macos_absolute_path(&shell.to_string_lossy()))
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/bin/zsh"))
+}
+
+fn is_macos_absolute_path(path: &str) -> bool {
+    path.starts_with('/')
 }
 
 fn path_entries_from_path_helper(script: &str) -> Result<Vec<PathBuf>, InstallFailure> {
@@ -54,10 +58,17 @@ fn path_entries_from_path_helper(script: &str) -> Result<Vec<PathBuf>, InstallFa
         .and_then(|value| value.split('"').next())
         .filter(|value| !value.is_empty())
         .ok_or_else(|| path_not_visible(None, "path_helper returned no PATH"))?;
-    let entries = std::env::split_paths(path).collect::<Vec<_>>();
+    let entries = macos_path_entries(path);
     (!entries.is_empty())
         .then_some(entries)
         .ok_or_else(|| path_not_visible(None, "path_helper returned an empty PATH"))
+}
+
+fn macos_path_entries(path: &str) -> Vec<PathBuf> {
+    path.split(':')
+        .filter(|entry| !entry.is_empty())
+        .map(PathBuf::from)
+        .collect()
 }
 
 fn path_not_visible(exit_code: Option<i32>, detail: &str) -> InstallFailure {
@@ -129,6 +140,20 @@ mod tests {
 
     #[test]
     fn configured_login_shell_is_used_when_absolute() {
-        assert!(login_shell().is_absolute());
+        assert!(is_macos_absolute_path(&login_shell().to_string_lossy()));
+    }
+
+    #[test]
+    fn macos_absolute_paths_do_not_depend_on_the_host_path_rules() {
+        assert!(is_macos_absolute_path("/bin/zsh"));
+        assert!(!is_macos_absolute_path("bin/zsh"));
+    }
+
+    #[test]
+    fn path_helper_output_always_uses_colons_as_separators() {
+        assert_eq!(
+            macos_path_entries(":/usr/local/bin::/usr/bin:"),
+            vec![PathBuf::from("/usr/local/bin"), PathBuf::from("/usr/bin")]
+        );
     }
 }
