@@ -2,21 +2,22 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a versioned, fail-closed Windows Sandbox harness that stages hash-validated immutable inputs and accepts only complete evidence from one fresh, per-run writable output directory.
+**Goal:** Build a versioned, fail-closed Windows Sandbox harness that stages hash-validated immutable inputs and accepts only complete evidence from one exclusively claimed, per-run writable output directory.
 
-**Architecture:** Repository-owned source lives in `scripts/windows-sandbox`; the host launcher stages an identified revision into external runtime `D:\codex\ai-deploy-toolkit\test\input`, creates a UUID run container, and generates a profile-specific WSB under unmapped `control`. The Sandbox receives only read-only input and the fresh writable `sandbox-output` child, revalidates the manifest, works in sandbox-local `%TEMP%`, and writes its completion marker last. The host collector trusts only the unmapped canonical control records for that exact UUID and preserves every failed or partial run.
+**Architecture:** Preserve approved Alternative B: tracked source under `scripts/windows-sandbox` is staged into one external read-only input mapping, while each GUID run owns an unmapped `control` child and one fresh writable `sandbox-output` child. A create-new claim file exclusively owns the run before children exist; immutable intent/process records resolve launch chronology, and both host and Sandbox use repository-owned strict validators plus identical canonical manifest bytes.
 
-**Tech Stack:** Windows PowerShell 5.1, Pester 5, Windows Sandbox XML, JSON Schema draft 2020-12, SHA-256, Git.
+**Tech Stack:** Windows PowerShell 5.1, Pester 5, Windows Sandbox XML, SHA-256, Git; no runtime package installation and no unprovided JSON Schema engine.
 
 **Global Constraints:**
 
-- All repository commands in this plan run from `D:\codex\ai-deploy-toolkit\apps\agent-manager\.worktrees\installation-orchestrator`; never operate in the dirty main checkout.
-- `D:\codex\ai-deploy-toolkit\test` is external runtime data, not source control. The tracked source of truth is only `scripts\windows-sandbox`; external `test\input` and `test\evidence` are never mapped as a parent or committed.
-- A run ID is a newly generated GUID in canonical lowercase `D` form. Each run creates `test\evidence\<guid>\control` and an empty sibling `sandbox-output`; only the latter is writable in the Sandbox.
-- Offline is the default. Only an exact descriptor value `network_mode: "online"` selects online; caller/profile disagreement is refused before configuration generation or process start.
-- Both WSB profiles disable clipboard, printer, audio input, video input, and vGPU. The two host mappings are non-overlapping: `test\input` read-only at `C:\AgentManagerHarness\Input` and exactly one `sandbox-output` read-write at `C:\AgentManagerHarness\Evidence`.
-- Reject reparse points, path traversal, prefix siblings, duplicate normalized names, unlisted inputs, hash mismatch, stale output, collisions, malformed records, non-final evidence, process/cleanup failure, and timeouts. Never broadly kill by process name, overwrite evidence, scan sibling runs, or delete a runtime path to retry.
-- The authoritative matrix remains 10 Windows scenarios plus 9 macOS Intel and 9 macOS Apple Silicon scenarios. macOS fixture, hash, ZIP, Mach-O, source, and static observations are not interactive acceptance; each macOS scenario remains blocked until real disposable hardware records it.
+- Run every repository command from `D:\codex\ai-deploy-toolkit\apps\agent-manager\.worktrees\installation-orchestrator`; never operate from another checkout.
+- `D:\codex\ai-deploy-toolkit\test` is external runtime data. Only `scripts\windows-sandbox` is tracked source; never map or commit the external test-root parent.
+- A run ID is a newly generated lowercase GUID in canonical `D` form. The only writable Sandbox mapping is that run's fresh `sandbox-output` child.
+- Offline is default. Only descriptor `network_mode: "online"` permits the online template, and caller/profile disagreement fails before launch.
+- Both profiles disable clipboard, printer, audio input, video input, and vGPU. They contain exactly two maps: `test\input` read-only at `C:\AgentManagerHarness\Input`, and `sandbox-output` read-write at `C:\AgentManagerHarness\Evidence`.
+- Reject reparse points, traversal, prefix siblings, duplicate normalized names, unlisted files, hash mismatch, stale output, collisions, malformed records, cleanup failure, and timeouts. Never kill by image name, overwrite evidence, enumerate sibling runs, or delete a runtime path to retry.
+- The truth boundary is exactly 10 Windows scenarios plus 9 macOS Intel and 9 macOS Apple Silicon scenarios. Static macOS checks are never interactive acceptance; unavailable real disposable hardware remains blocked.
+- All implementation tests use `TestDrive` and harmless fixtures. Sandbox, installers, product binaries, MSI, EXE, and external-test commands are future-only and explicitly gated.
 
 ---
 
@@ -52,91 +53,83 @@ scripts/windows-sandbox/
   tests/fixtures/evidence/                        # Harmless complete and incomplete JSON evidence used by Pester only.
 ```
 
-### Task 1: Define Canonical Safety Primitives
+### Task 1: Implement Canonical Paths, Exclusive Writes, And Manifest Bytes
 
 **Files:**
 - Create: `scripts/windows-sandbox/lib/Harness.Common.psm1`
 - Create: `scripts/windows-sandbox/tests/Harness.Common.Tests.ps1`
 - Test: `scripts/windows-sandbox/tests/Harness.Common.Tests.ps1`
 
-**Consumes:** PowerShell 5.1 filesystem and cryptography APIs.
-**Produces:** `ConvertTo-CanonicalPath`, `Assert-ContainedPath`, `Assert-NoReparsePath`, `Assert-SafeTree`, `Get-Sha256Hex`, `ConvertTo-CanonicalJson`, `Write-JsonCreateNew`, `Read-JsonFile`, `Assert-RunId`, and `Get-DeterministicManifest`.
+**Consumes:** Windows PowerShell 5.1 filesystem and SHA-256 APIs.
+**Produces:** canonical containment/reparse guards, create-new byte/JSON writers, ordinal sorting, and one manifest-byte algorithm used on host and in Sandbox.
 
-- [ ] **Step 1: Write failing path, reparse, run-ID, and deterministic-manifest tests.**
+- [ ] **Step 1: Write failing primitive and byte-identity tests.**
 
 ```powershell
 Import-Module "$PSScriptRoot/../lib/Harness.Common.psm1" -Force
-Describe 'harness safety primitives' {
-  It 'rejects separator-prefix siblings' {
-    { Assert-ContainedPath -Root 'C:\work\input' -Candidate 'C:\work\input-old\a.txt' } | Should -Throw '*outside root*'
+Describe 'canonical safety primitives' {
+  It 'rejects prefix siblings and reparse ancestors' {
+    { Assert-ContainedPath -Root 'C:\work\input' -Candidate 'C:\work\input-old\a' } | Should -Throw '*outside root*'
   }
-  It 'rejects invalid GUID text before it becomes a path' {
-    { Assert-RunId -RunId '../old-run' } | Should -Throw '*canonical GUID*'
+  It 'uses create-new without changing an existing record' {
+    $p=Join-Path $TestDrive 'record.json'; [IO.File]::WriteAllText($p,'{"old":true}',[Text.UTF8Encoding]::new($false))
+    { Write-JsonCreateNew -Path $p -Value ([ordered]@{run_id='00000000-0000-0000-0000-000000000001'}) } | Should -Throw '*exists*'
+    [IO.File]::ReadAllText($p) | Should -Be '{"old":true}'
   }
-  It 'does not overwrite a record' {
-    $path = Join-Path $TestDrive 'started.json'; [IO.File]::WriteAllText($path, '{"old":true}')
-    { Write-JsonCreateNew -Path $path -Value ([ordered]@{run_id='00000000-0000-0000-0000-000000000001'}) } | Should -Throw '*exists*'
-    [IO.File]::ReadAllText($path) | Should -Be '{"old":true}'
+  It 'sorts ordinally independent of current culture and hashes the payload without manifest_hash' {
+    $old=[Globalization.CultureInfo]::CurrentCulture
+    try { [Globalization.CultureInfo]::CurrentCulture=[Globalization.CultureInfo]::GetCultureInfo('tr-TR'); $m=Get-DeterministicManifest -InputRoot $fixture -ScenarioId clean-install -NetworkMode offline -SourceRevision ('a'*40); $m.files.path | Should -Be @('i.txt','z.txt'); (Get-ManifestPayloadBytes $m) | Should -Be (Get-ManifestPayloadBytes (Read-JsonFile $saved)) } finally { [Globalization.CultureInfo]::CurrentCulture=$old }
   }
 }
 ```
 
 - [ ] **Step 2: Run the focused test and verify red.**
 
-Run from `D:\codex\ai-deploy-toolkit\apps\agent-manager\.worktrees\installation-orchestrator`:
+Run: `Invoke-Pester .\scripts\windows-sandbox\tests\Harness.Common.Tests.ps1 -Output Detailed`
 
-```powershell
-Invoke-Pester .\scripts\windows-sandbox\tests\Harness.Common.Tests.ps1 -Output Detailed
-```
+Expected: FAIL because the module and functions do not exist.
 
-Expected: FAIL because `Harness.Common.psm1` and its exported functions do not exist.
-
-- [ ] **Step 3: Implement the primitive module.**
+- [ ] **Step 3: Implement PowerShell 5.1-safe primitives and the exact manifest algorithm.**
 
 ```powershell
 function ConvertTo-CanonicalPath { param([string]$Path) [IO.Path]::GetFullPath($Path).TrimEnd('\') }
 function Assert-ContainedPath {
-  param([string]$Root,[string]$Candidate)
-  $root = (ConvertTo-CanonicalPath $Root) + '\'; $candidate = [IO.Path]::GetFullPath($Candidate)
-  if (-not $candidate.StartsWith($root,[StringComparison]::OrdinalIgnoreCase)) { throw "Candidate outside root: $candidate" }
-  $candidate
+  param([string]$Root,[string]$Candidate,[switch]$AllowRoot)
+  $r=ConvertTo-CanonicalPath $Root; $c=[IO.Path]::GetFullPath($Candidate)
+  if(($AllowRoot -and $c.Equals($r,[StringComparison]::OrdinalIgnoreCase)) -or $c.StartsWith($r+'\',[StringComparison]::OrdinalIgnoreCase)){return $c}
+  throw "Candidate outside root: $c"
 }
-function Assert-NoReparsePath {
-  param([string]$Path)
-  $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
-  if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw "Reparse point rejected: $Path" }
-}
+function Assert-NoReparsePath { param([string]$Path) $i=Get-Item -LiteralPath $Path -Force -ErrorAction Stop; if(($i.Attributes -band [IO.FileAttributes]::ReparsePoint)-ne 0){throw "Reparse point rejected: $Path"} }
 function Assert-SafeTree {
-  param([string]$Root,[string]$Candidate)
-  $full = Assert-ContainedPath $Root $Candidate; $cursor = ConvertTo-CanonicalPath $Root
-  Assert-NoReparsePath $cursor
-  $relative = $full.Substring($cursor.Length).TrimStart('\')
-  foreach ($part in $relative.Split('\',[StringSplitOptions]::RemoveEmptyEntries)) { $cursor = Join-Path $cursor $part; if (Test-Path -LiteralPath $cursor) { Assert-NoReparsePath $cursor } }
-  $full
+  param([string]$Root,[string]$Candidate,[switch]$AllowRoot)
+  $r=ConvertTo-CanonicalPath $Root; $c=Assert-ContainedPath $r $Candidate -AllowRoot:$AllowRoot; Assert-NoReparsePath $r
+  $cursor=$r; foreach($part in $c.Substring($r.Length).TrimStart('\').Split(@('\'),[StringSplitOptions]::RemoveEmptyEntries)){ $cursor=Join-Path $cursor $part; if(Test-Path -LiteralPath $cursor){Assert-NoReparsePath $cursor} }; $c
 }
-function Assert-RunId { param([string]$RunId) $guid=[guid]::Empty; if (-not [guid]::TryParseExact($RunId,'D',[ref]$guid) -or $guid.ToString('D') -cne $RunId) { throw 'Run ID must be a canonical GUID' }; $RunId }
+function Assert-RunId { param([string]$RunId) $g=[guid]::Empty; if(-not [guid]::TryParseExact($RunId,'D',[ref]$g)-or $g.ToString('D')-cne $RunId){throw 'Run ID must be a canonical lowercase GUID'}; $RunId }
+function Get-Sha256Bytes { param([byte[]]$Bytes) $sha=[Security.Cryptography.SHA256]::Create(); try{(($sha.ComputeHash($Bytes)|ForEach-Object {$_.ToString('x2')})-join '')}finally{$sha.Dispose()} }
 function Get-Sha256Hex { param([string]$Path) (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
-function ConvertTo-CanonicalJson { param($Value) [Text.Encoding]::UTF8.GetBytes(($Value | ConvertTo-Json -Depth 32 -Compress)) }
-function Write-JsonCreateNew { param([string]$Path,$Value) $bytes=ConvertTo-CanonicalJson $Value; $s=[IO.File]::Open($Path,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None); try{$s.Write($bytes,0,$bytes.Length)}finally{$s.Dispose()} }
-function Read-JsonFile { param([string]$Path) Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json }
-function Get-DeterministicManifest { param([string]$InputRoot,[string]$ScenarioId,[string]$NetworkMode,[string]$SourceRevision)
-  $root=ConvertTo-CanonicalPath $InputRoot; Assert-NoReparsePath $root; $seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-  $files=Get-ChildItem -LiteralPath $root -File -Recurse -Force | ForEach-Object { Assert-SafeTree $root $_.FullName|Out-Null; $name=$_.FullName.Substring($root.Length).TrimStart('\').Replace('\','/').ToLowerInvariant(); if(-not $seen.Add($name)){throw "Duplicate normalized input: $name"}; [ordered]@{path=$name;length=[int64]$_.Length;sha256=Get-Sha256Hex $_.FullName} } | Sort-Object { $_.path }
-  $manifest=[ordered]@{run_independent=$true;scenario_id=$ScenarioId;network_mode=$NetworkMode;source_revision=$SourceRevision;files=@($files)}
-  $manifest.manifest_hash=([Security.Cryptography.SHA256]::Create().ComputeHash((ConvertTo-CanonicalJson $manifest))|ForEach-Object ToString x2)-join ''; $manifest
+function ConvertTo-CanonicalJsonBytes { param($Value) [Text.UTF8Encoding]::new($false).GetBytes(($Value|ConvertTo-Json -Depth 32 -Compress)) }
+function Write-BytesCreateNew { param([string]$Path,[byte[]]$Bytes) try{$s=[IO.File]::Open($Path,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)}catch[IO.IOException]{throw "Path exists or cannot be exclusively created: $Path"}; try{$s.Write($Bytes,0,$Bytes.Length);$s.Flush()}finally{$s.Dispose()} }
+function Write-JsonCreateNew { param([string]$Path,$Value) Write-BytesCreateNew $Path (ConvertTo-CanonicalJsonBytes $Value) }
+function Read-JsonFile { param([string]$Path) [IO.File]::ReadAllText($Path,[Text.Encoding]::UTF8)|ConvertFrom-Json }
+function Sort-OrdinalStrings { param([string[]]$Values) $copy=[string[]]@($Values); [Array]::Sort($copy,[StringComparer]::Ordinal); $copy }
+function Get-ManifestPayloadObject { param($Manifest) [ordered]@{schema_version=$Manifest.schema_version;scenario_id=$Manifest.scenario_id;network_mode=$Manifest.network_mode;source_revision=$Manifest.source_revision;files=@($Manifest.files|ForEach-Object{[ordered]@{path=$_.path;length=[int64]$_.length;sha256=$_.sha256}})} }
+function Get-ManifestPayloadBytes { param($Manifest) ConvertTo-CanonicalJsonBytes (Get-ManifestPayloadObject $Manifest) }
+function Get-DeterministicManifest {
+  param([string]$InputRoot,[string]$ScenarioId,[string]$NetworkMode,[string]$SourceRevision)
+  $root=ConvertTo-CanonicalPath $InputRoot; Assert-SafeTree $root $root -AllowRoot|Out-Null; $byName=@{}; $names=[Collections.Generic.List[string]]::new()
+  foreach($file in Get-ChildItem -LiteralPath $root -File -Recurse -Force){Assert-SafeTree $root $file.FullName|Out-Null;$name=$file.FullName.Substring($root.Length).TrimStart('\').Replace('\','/').ToLowerInvariant();if($byName.ContainsKey($name)){throw "Duplicate normalized input: $name"};$byName[$name]=[ordered]@{path=$name;length=[int64]$file.Length;sha256=Get-Sha256Hex $file.FullName};$names.Add($name)}
+  $m=[ordered]@{schema_version=1;scenario_id=$ScenarioId;network_mode=$NetworkMode;source_revision=$SourceRevision;files=@(Sort-OrdinalStrings $names|ForEach-Object{$byName[$_]})}; $m.manifest_hash=Get-Sha256Bytes (Get-ManifestPayloadBytes $m); $m
 }
 ```
 
-Implement `Get-DeterministicManifest` by calling `Assert-SafeTree` for each enumerated file, converting its root-relative path to lowercase ordinal `/` form, rejecting duplicate names, sorting ordinally, and hashing the UTF-8 bytes of the canonical ordered JSON object. Export every function above and `Get-DeterministicManifest` with `Export-ModuleMember`.
+The hashed bytes are exactly UTF-8 without BOM of compressed ordered JSON containing `schema_version`, `scenario_id`, `network_mode`, `source_revision`, and `files`, in that order. `manifest_hash` is excluded from those bytes, then appended as the final top-level property; validation reconstructs the payload object and bytes, never hashes the serialized on-disk object wholesale.
 
-- [ ] **Step 4: Run the primitive test and verify green.**
+- [ ] **Step 4: Run tests and verify green.**
 
-```powershell
-Invoke-Pester .\scripts\windows-sandbox\tests\Harness.Common.Tests.ps1 -Output Detailed
-powershell.exe -NoProfile -Command "Import-Module .\scripts\windows-sandbox\lib\Harness.Common.psm1 -Force"
-```
+Run: `Invoke-Pester .\scripts\windows-sandbox\tests\Harness.Common.Tests.ps1 -Output Detailed`
 
-Expected: PASS; tests cover prefix siblings, `..`, reparse ancestors, canonical GUID parsing, create-new behavior, ordinal manifest ordering, duplicate normalized names, and stable SHA-256.
+Expected: PASS for prefix siblings, root equality, reparse ancestors, canonical GUIDs, create-new collisions, Turkish-culture ordering, duplicate normalized names, and host/Sandbox payload-byte equality.
 
 - [ ] **Step 5: Commit primitives.**
 
@@ -145,69 +138,104 @@ git add scripts/windows-sandbox/lib/Harness.Common.psm1 scripts/windows-sandbox/
 git commit -m "feat: add sandbox harness safety primitives"
 ```
 
-### Task 2: Add Exact Schemas And DOM-Safe Profile Templates
+### Task 2: Define Complete Contracts And Repository-Owned Validators
 
 **Files:**
 - Create: `scripts/windows-sandbox/schemas/scenario.schema.json`
 - Create: `scripts/windows-sandbox/schemas/input-manifest.schema.json`
 - Create: `scripts/windows-sandbox/schemas/complete.schema.json`
-- Create: `scripts/windows-sandbox/templates/agent-manager-sandbox-offline.wsb.xml`
-- Create: `scripts/windows-sandbox/templates/agent-manager-sandbox-online.wsb.xml`
+- Modify: `scripts/windows-sandbox/lib/Harness.Common.psm1`
 - Modify: `scripts/windows-sandbox/tests/Harness.Common.Tests.ps1`
 - Test: `scripts/windows-sandbox/tests/Harness.Common.Tests.ps1`
 
-**Consumes:** shared canonical JSON/XML helpers.
-**Produces:** strict descriptor, manifest, and completion contracts plus two templates with empty DOM-populated text fields.
+**Consumes:** canonical JSON values and the manifest payload-byte algorithm.
+**Produces:** documentation schemas and explicit strict validators; the validators, not PowerShell itself, are runtime enforcement.
 
-- [ ] **Step 1: Write failing schema/profile assertions.**
+- [ ] **Step 1: Write table-driven failing contract tests.**
 
 ```powershell
-It 'defines only the two hardened mapped folders' {
-  [xml]$xml = Get-Content "$PSScriptRoot/../templates/agent-manager-sandbox-offline.wsb.xml"
-  @($xml.Configuration.MappedFolders.MappedFolder).Count | Should -Be 2
-  $xml.Configuration.Networking | Should -Be 'Disable'
-  foreach($n in 'ClipboardRedirection','PrinterRedirection','AudioInput','VideoInput','VGpu'){ $xml.Configuration.$n | Should -Be 'Disable' }
-}
-It 'requires identity and hashes in the completion schema' {
-  $schema=Get-Content "$PSScriptRoot/../schemas/complete.schema.json" -Raw | ConvertFrom-Json
-  @($schema.required) | Should -Contain 'configuration_hash'; @($schema.required) | Should -Contain 'evidence_hashes'
+$valid=[ordered]@{schema_version=1;id='clean-install';platform='windows';network_mode='offline';timeout_seconds=180;declared_process='tests/fixtures/input/fixture-clean-install.ps1';arguments=@('-Mode','safe');required_evidence=@('results.tsv','sandbox-transcript.txt')}
+It 'rejects unknown, absent, wrong-type, pattern, array, and bound violations' {
+  $cases=@(
+    { $x=[ordered]@{}+$valid;$x.extra=1;$x },
+    { $x=[ordered]@{}+$valid;$x.Remove('id');$x },
+    { $x=[ordered]@{}+$valid;$x.timeout_seconds='180';$x },
+    { $x=[ordered]@{}+$valid;$x.id='../bad';$x },
+    { $x=[ordered]@{}+$valid;$x.arguments='-Mode';$x },
+    { $x=[ordered]@{}+$valid;$x.timeout_seconds=3601;$x })
+  foreach($make in $cases){ { Assert-ScenarioContract (& $make) } | Should -Throw }
 }
 ```
 
-- [ ] **Step 2: Run the focused test and verify red.**
+- [ ] **Step 2: Run tests and verify red.**
 
 Run: `Invoke-Pester .\scripts\windows-sandbox\tests\Harness.Common.Tests.ps1 -Output Detailed`
-Expected: FAIL because templates and schemas do not exist.
 
-- [ ] **Step 3: Create strict schemas and valid templates.**
+Expected: FAIL because schemas and strict validators do not exist.
 
-`complete.schema.json` is the following complete contract; `scenario.schema.json` requires `id`, `platform`, `timeout_seconds`, `required_evidence`, and accepts only `online` or `offline` `network_mode`; the launcher supplies offline when absent. `input-manifest.schema.json` requires `run_independent`, `scenario_id`, `network_mode`, `source_revision`, `files`, and `manifest_hash`, with each file requiring `path`, `length`, and `sha256`.
+- [ ] **Step 3: Create the complete scenario and input-manifest schemas.**
+
+`scenario.schema.json`:
 
 ```json
-{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["run_id","scenario_id","profile","input_manifest_hash","configuration_hash","source_revision","started_at_utc","ended_at_utc","status","evidence_hashes","finalized_at_utc"],"properties":{"run_id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},"scenario_id":{"type":"string","pattern":"^[a-z0-9-]+$"},"profile":{"enum":["offline","online"]},"input_manifest_hash":{"type":"string","pattern":"^[0-9a-f]{64}$"},"configuration_hash":{"type":"string","pattern":"^[0-9a-f]{64}$"},"source_revision":{"type":"string","pattern":"^[0-9a-f]{40}$"},"started_at_utc":{"type":"string","format":"date-time"},"ended_at_utc":{"type":"string","format":"date-time"},"status":{"enum":["complete"]},"evidence_hashes":{"type":"object","minProperties":1,"additionalProperties":{"type":"string","pattern":"^[0-9a-f]{64}$"}},"finalized_at_utc":{"type":"string","format":"date-time"}}}
+{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["schema_version","id","platform","network_mode","timeout_seconds","declared_process","arguments","required_evidence"],"properties":{"schema_version":{"const":1},"id":{"type":"string","pattern":"^[a-z0-9]+(?:-[a-z0-9]+)*$"},"platform":{"const":"windows"},"network_mode":{"enum":["offline","online"]},"timeout_seconds":{"type":"integer","minimum":1,"maximum":3600},"declared_process":{"type":"string","pattern":"^(?!.*(?:^|/)\\.\\.(?:/|$))(?!/)(?!.*//)[a-z0-9][a-z0-9._/-]*$"},"arguments":{"type":"array","maxItems":32,"items":{"type":"string","pattern":"^(?!.*(?:^|/)\\.\\.(?:/|$))(?!/)(?!.*//)[a-z0-9][a-z0-9._/-]*$"}},"required_evidence":{"type":"array","minItems":1,"maxItems":32,"uniqueItems":true,"items":{"type":"string","pattern":"^[a-z0-9][a-z0-9._-]*$"}}}}
 ```
 
-```xml
-<Configuration><VGpu>Disable</VGpu><Networking>Disable</Networking><ClipboardRedirection>Disable</ClipboardRedirection><PrinterRedirection>Disable</PrinterRedirection><AudioInput>Disable</AudioInput><VideoInput>Disable</VideoInput><MappedFolders><MappedFolder><HostFolder></HostFolder><SandboxFolder>C:\AgentManagerHarness\Input</SandboxFolder><ReadOnly>true</ReadOnly></MappedFolder><MappedFolder><HostFolder></HostFolder><SandboxFolder>C:\AgentManagerHarness\Evidence</SandboxFolder><ReadOnly>false</ReadOnly></MappedFolder></MappedFolders><LogonCommand><Command></Command></LogonCommand></Configuration>
+`input-manifest.schema.json`:
+
+```json
+{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["schema_version","scenario_id","network_mode","source_revision","files","manifest_hash"],"properties":{"schema_version":{"const":1},"scenario_id":{"type":"string","pattern":"^[a-z0-9]+(?:-[a-z0-9]+)*$"},"network_mode":{"enum":["offline","online"]},"source_revision":{"type":"string","pattern":"^[0-9a-f]{40}$"},"files":{"type":"array","minItems":1,"maxItems":4096,"items":{"type":"object","additionalProperties":false,"required":["path","length","sha256"],"properties":{"path":{"type":"string","pattern":"^(?!.*(?:^|/)\\.\\.(?:/|$))(?!/)(?!.*//)[a-z0-9][a-z0-9._/-]*$"},"length":{"type":"integer","minimum":0,"maximum":2147483648},"sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"}}}},"manifest_hash":{"type":"string","pattern":"^[0-9a-f]{64}$"}}}
 ```
 
-The online template is identical except `<Networking>Enable</Networking>`. The host never performs XML string replacement: it loads `[xml]`, assigns both `HostFolder` `InnerText` values and the one `Command` `InnerText`, saves, reloads, and validates every node against the exact policy.
+`complete.schema.json`:
 
-- [ ] **Step 4: Run profile/schema assertions and verify green.**
+```json
+{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["schema_version","run_id","scenario_id","profile","input_manifest_hash","configuration_hash","source_revision","declared_process_id","started_at_utc","ended_at_utc","cleanup_status","status","evidence_hashes","finalized_at_utc"],"properties":{"schema_version":{"const":1},"run_id":{"type":"string","pattern":"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},"scenario_id":{"type":"string","pattern":"^[a-z0-9]+(?:-[a-z0-9]+)*$"},"profile":{"enum":["offline","online"]},"input_manifest_hash":{"type":"string","pattern":"^[0-9a-f]{64}$"},"configuration_hash":{"type":"string","pattern":"^[0-9a-f]{64}$"},"source_revision":{"type":"string","pattern":"^[0-9a-f]{40}$"},"declared_process_id":{"type":"integer","minimum":1,"maximum":2147483647},"started_at_utc":{"type":"string","format":"date-time","pattern":"^[0-9]{4}-[0-9]{2}-[0-9]{2}T.*Z$"},"ended_at_utc":{"type":"string","format":"date-time","pattern":"^[0-9]{4}-[0-9]{2}-[0-9]{2}T.*Z$"},"cleanup_status":{"const":"succeeded"},"status":{"const":"complete"},"evidence_hashes":{"type":"object","minProperties":1,"maxProperties":35,"propertyNames":{"pattern":"^[a-z0-9][a-z0-9._-]*$"},"additionalProperties":{"type":"string","pattern":"^[0-9a-f]{64}$"}},"finalized_at_utc":{"type":"string","format":"date-time","pattern":"^[0-9]{4}-[0-9]{2}-[0-9]{2}T.*Z$"}}}
+```
 
-Run: `Invoke-Pester .\scripts\windows-sandbox\tests\Harness.Common.Tests.ps1 -Output Detailed`
-Expected: PASS; test rejects a third map, mutable input, wrong sandbox path, enabled redirected device, template command injection, malformed hash, absent completion identity, and invalid network mode.
-
-- [ ] **Step 5: Commit schemas and templates.**
+- [ ] **Step 4: Implement explicit validators matching every schema keyword used.**
 
 ```powershell
-git add scripts/windows-sandbox/schemas scripts/windows-sandbox/templates scripts/windows-sandbox/tests/Harness.Common.Tests.ps1
-git commit -m "feat: define sandbox configuration contracts"
+function Assert-ExactProperties { param($Value,[string[]]$Required,[string[]]$Allowed) $names=@($Value.psobject.Properties.Name);foreach($n in $Required){if($names -cnotcontains $n){throw "Missing property: $n"}};foreach($n in $names){if($Allowed -cnotcontains $n){throw "Unknown property: $n"}} }
+function Assert-String { param($Value,[string]$Name,[string]$Pattern,[int]$Min=0,[int]$Max=[int]::MaxValue) if($Value -isnot [string]-or $Value.Length -lt $Min-or $Value.Length -gt $Max-or $Value -cnotmatch $Pattern){throw "Invalid string: $Name"} }
+function Assert-Integer { param($Value,[string]$Name,[int64]$Min,[int64]$Max) if($Value -isnot [int]-and $Value -isnot [long]){throw "Invalid integer type: $Name"};if([int64]$Value-lt $Min-or [int64]$Value-gt $Max){throw "Integer out of bounds: $Name"} }
+function Assert-StringArray { param($Value,[string]$Name,[int]$Min,[int]$Max,[string]$Pattern,[switch]$Unique) if($Value -is [string]-or $Value -isnot [Array]){throw "Invalid array: $Name"};if($Value.Count-lt $Min-or $Value.Count-gt $Max){throw "Array bounds: $Name"};$seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal);foreach($v in $Value){Assert-String $v $Name $Pattern 1 256;if($Unique-and -not $seen.Add($v)){throw "Duplicate array value: $Name"}} }
+function Assert-ScenarioContract { param($Value) $r=@('schema_version','id','platform','network_mode','timeout_seconds','declared_process','arguments','required_evidence');Assert-ExactProperties $Value $r $r;if($Value.schema_version-ne 1-or $Value.platform-cne 'windows'){throw 'Invalid scenario constants'};Assert-String $Value.id id '^[a-z0-9]+(?:-[a-z0-9]+)*$';if(@('offline','online')-cnotcontains $Value.network_mode){throw 'Invalid network mode'};Assert-Integer $Value.timeout_seconds timeout_seconds 1 3600;$inputPattern='^(?!.*(?:^|/)\.\.(?:/|$))(?!/)(?!.*//)[a-z0-9][a-z0-9._/-]*$';Assert-String $Value.declared_process declared_process $inputPattern;Assert-StringArray $Value.arguments arguments 0 32 $inputPattern;Assert-StringArray $Value.required_evidence required_evidence 1 32 '^[a-z0-9][a-z0-9._-]*$' -Unique }
+function Assert-InputManifestContract {
+  param($Value)
+  $r=@('schema_version','scenario_id','network_mode','source_revision','files','manifest_hash');Assert-ExactProperties $Value $r $r
+  if($Value.schema_version-ne 1){throw 'Invalid manifest version'};Assert-String $Value.scenario_id scenario_id '^[a-z0-9]+(?:-[a-z0-9]+)*$';if(@('offline','online')-cnotcontains $Value.network_mode){throw 'Invalid network mode'};Assert-String $Value.source_revision source_revision '^[0-9a-f]{40}$';Assert-String $Value.manifest_hash manifest_hash '^[0-9a-f]{64}$'
+  if($Value.files -is [string]-or $Value.files -isnot [Array]-or $Value.files.Count-lt 1-or $Value.files.Count-gt 4096){throw 'Invalid files array'};$seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+  foreach($f in $Value.files){$fr=@('path','length','sha256');Assert-ExactProperties $f $fr $fr;Assert-String $f.path path '^(?!.*(?:^|/)\.\.(?:/|$))(?!/)(?!.*//)[a-z0-9][a-z0-9._/-]*$';if(-not $seen.Add($f.path)){throw 'Duplicate manifest path'};Assert-Integer $f.length length 0 2147483648;Assert-String $f.sha256 sha256 '^[0-9a-f]{64}$'}
+  if((Get-Sha256Bytes (Get-ManifestPayloadBytes $Value))-cne $Value.manifest_hash){throw 'Manifest hash mismatch'}
+}
+function Assert-UtcTimestamp { param([string]$Value,[string]$Name) Assert-String $Value $Name '^[0-9]{4}-[0-9]{2}-[0-9]{2}T.*Z$';$dt=[datetime]::MinValue;if(-not [DateTime]::TryParseExact($Value,'o',[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::AssumeUniversal,[ref]$dt)){throw "Invalid UTC timestamp: $Name"} }
+function Assert-CompleteContract {
+  param($Value)
+  $r=@('schema_version','run_id','scenario_id','profile','input_manifest_hash','configuration_hash','source_revision','declared_process_id','started_at_utc','ended_at_utc','cleanup_status','status','evidence_hashes','finalized_at_utc');Assert-ExactProperties $Value $r $r
+  if($Value.schema_version-ne 1-or $Value.cleanup_status-cne 'succeeded'-or $Value.status-cne 'complete'){throw 'Invalid completion constants'};Assert-RunId $Value.run_id|Out-Null;Assert-String $Value.scenario_id scenario_id '^[a-z0-9]+(?:-[a-z0-9]+)*$';if(@('offline','online')-cnotcontains $Value.profile){throw 'Invalid profile'}
+  foreach($n in 'input_manifest_hash','configuration_hash'){Assert-String $Value.$n $n '^[0-9a-f]{64}$'};Assert-String $Value.source_revision source_revision '^[0-9a-f]{40}$';Assert-Integer $Value.declared_process_id declared_process_id 1 2147483647;foreach($n in 'started_at_utc','ended_at_utc','finalized_at_utc'){Assert-UtcTimestamp $Value.$n $n}
+  $props=@($Value.evidence_hashes.psobject.Properties);if($props.Count-lt 1-or $props.Count-gt 35){throw 'Invalid evidence hash bounds'};foreach($p in $props){Assert-String $p.Name evidence_name '^[a-z0-9][a-z0-9._-]*$';Assert-String $p.Value evidence_hash '^[0-9a-f]{64}$'}
+}
 ```
 
-### Task 3: Declare The Exact 28-Scenario Boundary
+Tests mutate every property category in all three valid fixtures, including unknown nested file fields and an empty `evidence_hashes` object. Do not claim draft-2020-12 engine validation; schemas document the contracts and repository-owned validators enforce them without installation.
+
+- [ ] **Step 5: Run tests, verify green, and commit.**
+
+```powershell
+Invoke-Pester .\scripts\windows-sandbox\tests\Harness.Common.Tests.ps1 -Output Detailed
+git add scripts/windows-sandbox/schemas scripts/windows-sandbox/lib/Harness.Common.psm1 scripts/windows-sandbox/tests/Harness.Common.Tests.ps1
+git commit -m "feat: define strict sandbox contracts"
+```
+
+Expected: PASS for unknown fields, required fields, exact types, patterns, arrays, uniqueness, and every bound.
+
+### Task 3: Add Exact Profiles And The 10/18 Scenario Boundary
 
 **Files:**
+- Create: `scripts/windows-sandbox/templates/agent-manager-sandbox-offline.wsb.xml`
+- Create: `scripts/windows-sandbox/templates/agent-manager-sandbox-online.wsb.xml`
 - Create: `scripts/windows-sandbox/scenarios/windows/clean-install.json`
 - Create: `scripts/windows-sandbox/scenarios/windows/uac-accept.json`
 - Create: `scripts/windows-sandbox/scenarios/windows/uac-decline.json`
@@ -220,47 +248,60 @@ git commit -m "feat: define sandbox configuration contracts"
 - Create: `scripts/windows-sandbox/scenarios/windows/postflight-path-version.json`
 - Create: `scripts/windows-sandbox/scenarios/macos/matrix.json`
 - Create: `scripts/windows-sandbox/tests/Scenario.Matrix.Tests.ps1`
+- Modify: `scripts/windows-sandbox/tests/Harness.Common.Tests.ps1`
 - Test: `scripts/windows-sandbox/tests/Scenario.Matrix.Tests.ps1`
 
-**Consumes:** scenario schema and authoritative matrix.
-**Produces:** ten profile-routed Windows descriptors and eighteen non-interactive macOS records.
+**Consumes:** strict scenario validator and approved matrix.
+**Produces:** exact profile routes, exact descriptor process routes, and 18 blocked/static macOS records.
 
-- [ ] **Step 1: Write the failing matrix test.**
+- [ ] **Step 1: Write failing exact-route tests.**
 
 ```powershell
-$windows=Get-ChildItem "$PSScriptRoot/../scenarios/windows" -Filter *.json | ForEach-Object { Get-Content $_ -Raw|ConvertFrom-Json }
-$macos=(Get-Content "$PSScriptRoot/../scenarios/macos/matrix.json" -Raw|ConvertFrom-Json).scenarios
-@($windows).Count|Should -Be 10; @($macos|Where-Object architecture -eq intel).Count|Should -Be 9
-@($macos|Where-Object architecture -eq apple_silicon).Count|Should -Be 9
-@($macos|Where-Object { $_.execution_status -ne 'blocked' -or $_.evidence_kind -ne 'static_only' }).Count|Should -Be 0
+$routes=[ordered]@{'clean-install'='offline';'uac-accept'='offline';'uac-decline'='offline';'path-refresh'='offline';'multiple-node-installations'='offline';'proxy-failure'='online';'file-lock'='offline';'disk-space-guard'='offline';'batch-partial-failure'='offline';'postflight-path-version'='offline'}
+$windows=Get-ChildItem "$PSScriptRoot/../scenarios/windows" -Filter *.json|ForEach-Object{Read-JsonFile $_.FullName}
+@($windows).Count|Should -Be 10
+foreach($d in $windows){Assert-ScenarioContract $d;$d.network_mode|Should -Be $routes[$d.id];$d.declared_process|Should -Be "tests/fixtures/input/fixture-$($d.id).ps1"}
+$mac=(Read-JsonFile "$PSScriptRoot/../scenarios/macos/matrix.json").scenarios
+@($mac|Where-Object architecture -ceq 'intel').Count|Should -Be 9;@($mac|Where-Object architecture -ceq 'apple_silicon').Count|Should -Be 9
+@($mac|Where-Object{$_.execution_status-cne 'blocked'-or $_.evidence_kind-cne 'static_only'-or -not $_.requires_disposable_macos}).Count|Should -Be 0
 ```
 
-- [ ] **Step 2: Run the matrix test and verify red.**
+- [ ] **Step 2: Run tests and verify red.**
 
 Run: `Invoke-Pester .\scripts\windows-sandbox\tests\Scenario.Matrix.Tests.ps1 -Output Detailed`
-Expected: FAIL because descriptors and macOS matrix do not exist.
 
-- [ ] **Step 3: Create the descriptors.**
+Expected: FAIL because profiles and scenario files do not exist.
 
-Each Windows file uses the same complete shape below with its filename as `id`, a positive bounded timeout, declared fixture process, and required records. Set `proxy-failure` to `online`; set the remaining nine listed Windows IDs to `offline`. The macOS matrix lists the nine authoritative Intel and nine Apple Silicon cases with `execution_status: "blocked"`, `evidence_kind: "static_only"`, and `requires_disposable_macos: true`.
+- [ ] **Step 3: Create exact descriptors and hardened templates.**
+
+Every Windows descriptor uses this complete shape, changing only `id`, route, fixture name, arguments, timeout, and required evidence:
 
 ```json
-{"id":"proxy-failure","platform":"windows","network_mode":"online","timeout_seconds":180,"declared_process":"fixture-proxy-failure.ps1","required_evidence":["started.json","provenance.json","results.tsv","sandbox-transcript.txt"]}
+{"schema_version":1,"id":"proxy-failure","platform":"windows","network_mode":"online","timeout_seconds":180,"declared_process":"tests/fixtures/input/fixture-proxy-failure.ps1","arguments":["artifact.txt"],"required_evidence":["results.tsv","sandbox-transcript.txt"]}
 ```
 
-- [ ] **Step 4: Run the matrix test and verify green.**
+Offline template:
 
-Run: `Invoke-Pester .\scripts\windows-sandbox\tests\Scenario.Matrix.Tests.ps1 -Output Detailed`
-Expected: PASS; a descriptor without declared profile or a macOS record marked interactive fails.
+```xml
+<Configuration><VGpu>Disable</VGpu><Networking>Disable</Networking><ClipboardRedirection>Disable</ClipboardRedirection><PrinterRedirection>Disable</PrinterRedirection><AudioInput>Disable</AudioInput><VideoInput>Disable</VideoInput><MappedFolders><MappedFolder><HostFolder></HostFolder><SandboxFolder>C:\AgentManagerHarness\Input</SandboxFolder><ReadOnly>true</ReadOnly></MappedFolder><MappedFolder><HostFolder></HostFolder><SandboxFolder>C:\AgentManagerHarness\Evidence</SandboxFolder><ReadOnly>false</ReadOnly></MappedFolder></MappedFolders><LogonCommand><Command></Command></LogonCommand></Configuration>
+```
 
-- [ ] **Step 5: Commit the matrix.**
+The online template differs only in `<Networking>Enable</Networking>`. The macOS matrix has exactly 18 objects with `scenario_id`, `architecture`, `execution_status: "blocked"`, `evidence_kind: "static_only"`, and `requires_disposable_macos: true`.
+
+- [ ] **Step 4: Run tests and verify green.**
+
+Run: `Invoke-Pester .\scripts\windows-sandbox\tests\Harness.Common.Tests.ps1, .\scripts\windows-sandbox\tests\Scenario.Matrix.Tests.ps1 -Output Detailed`
+
+Expected: PASS for exact ten routes, exact process paths, template policy, nine Intel and nine Apple Silicon blocked/static records; no interactive acceptance is asserted.
+
+- [ ] **Step 5: Commit profiles and matrix.**
 
 ```powershell
-git add scripts/windows-sandbox/scenarios scripts/windows-sandbox/tests/Scenario.Matrix.Tests.ps1
-git commit -m "feat: declare sandbox scenario matrix"
+git add scripts/windows-sandbox/templates scripts/windows-sandbox/scenarios scripts/windows-sandbox/tests/Harness.Common.Tests.ps1 scripts/windows-sandbox/tests/Scenario.Matrix.Tests.ps1
+git commit -m "feat: declare sandbox scenario boundary"
 ```
 
-### Task 4: Stage Inputs And Create A Fresh Host-Controlled Run
+### Task 4: Stage Inputs Without Overwrite And Claim Runs Exclusively
 
 **Files:**
 - Create: `scripts/windows-sandbox/Invoke-AgentManagerSandbox.ps1`
@@ -269,118 +310,114 @@ git commit -m "feat: declare sandbox scenario matrix"
 - Create: `scripts/windows-sandbox/tests/Launcher.Preflight.Tests.ps1`
 - Test: `scripts/windows-sandbox/tests/Launcher.Preflight.Tests.ps1`
 
-**Consumes:** tracked source revision, descriptor, external runtime root, and primitive module.
-**Produces:** staged `test\input`, matching input/control manifests, UUID run container, and create-new `control\launch.json`.
+**Consumes:** tracked allowlist, descriptor, source revision, same-volume external runtime root, and common primitives.
+**Produces:** immutable staged `test\input`, preserved prior generations, plus run `owner.claim`, `control`, and empty `sandbox-output`.
 
-- [ ] **Step 1: Write failing staging tests.**
+- [ ] **Step 1: Write failing concurrency, staging, and failure-preservation tests.**
 
 ```powershell
-It 'refuses an existing run container without deleting it' {
-  $id='00000000-0000-0000-0000-000000000001'; $run=Join-Path $TestDrive "evidence\$id"; New-Item -ItemType Directory -Force $run|Out-Null
-  { New-HarnessRun -EvidenceRoot (Join-Path $TestDrive 'evidence') -RunId $id } | Should -Throw '*exists*'; Test-Path $run|Should -BeTrue
+It 'allows exactly one claimant for a run ID' {
+  $root=Join-Path $TestDrive 'evidence';[IO.Directory]::CreateDirectory($root)|Out-Null;$id='00000000-0000-0000-0000-000000000001'
+  $jobs=1..2|ForEach-Object{Start-Job -ScriptBlock $claimScript -ArgumentList $root,$id}
+  $results=@($jobs|Wait-Job|Receive-Job);@($results|Where-Object status -eq 'owned').Count|Should -Be 1;@($results|Where-Object status -eq 'collision').Count|Should -Be 1
+  @(Get-ChildItem (Join-Path $root $id) -Force).Name|Should -Be @('control','owner.claim','sandbox-output')
 }
-It 'refuses input content not listed by the canonical manifest' {
-  $input=Join-Path $TestDrive 'input'; New-Item -ItemType Directory -Path $input|Out-Null; [IO.File]::WriteAllText((Join-Path $input 'runner.txt'),'ok')
-  $manifest=Get-DeterministicManifest -InputRoot $input -ScenarioId path-refresh -NetworkMode offline -SourceRevision ('a'*40); Write-JsonCreateNew (Join-Path $input 'input-manifest.json') $manifest; [IO.File]::WriteAllText((Join-Path $input 'extra.bin'),'x')
-  { Assert-StagedInput -InputRoot $input } | Should -Throw '*unexpected*'
+It 'preserves prior input and partial staging on injected copy failure' {
+  { Publish-StagedInput -TestRoot $root -CopyApi $failingCopy }|Should -Throw
+  (Read-JsonFile (Join-Path $root 'input-current.json')).directory|Should -Be $oldDirectory
+  Test-Path (Join-Path $root $oldDirectory)|Should -BeTrue;Test-Path $capturedStaging|Should -BeTrue
 }
 ```
 
-- [ ] **Step 2: Run staging tests and verify red.**
+- [ ] **Step 2: Run tests and verify red.**
 
 Run: `Invoke-Pester .\scripts\windows-sandbox\tests\Launcher.Preflight.Tests.ps1 -Output Detailed`
-Expected: FAIL because launcher staging functions are absent.
 
-- [ ] **Step 3: Implement strict staging lifecycle.**
+Expected: FAIL because staging and ownership functions do not exist.
+
+- [ ] **Step 3: Implement same-volume staging and immutable input selection.**
+
+Generate `test\input-staging-<guid>` beside `test\input`, ensuring source and destination volume roots from `[IO.Path]::GetPathRoot()` are ordinal-ignore-case equal. Preflight the tracked allowlist of runner, selected scenario, common module, schemas, and declared fixture inputs; each source and every existing ancestor must pass `Assert-SafeTree`, each source must be a regular file, and each normalized destination must be unique and contained. Copy each allowlisted file with `[IO.File]::Open(source,Open,Read,Read)` to `[IO.File]::Open(destination,CreateNew,Write,None)`, creating each allowlisted directory once and rejecting reparses after creation.
+
+Build and validate the manifest in staging, write `input-manifest.json` create-new, re-enumerate the complete staging tree, and reject anything except manifest-listed files plus the manifest itself. Never delete, replace, or merge an existing directory.
+
+Open persistent `test\input-transition.lock` with `FileMode.OpenOrCreate`, read/write access, and `FileShare.None`; failure to obtain that exclusive handle blocks without changing input. While holding it, revalidate staging and any existing `test\input`. If existing input has the same valid manifest hash, preserve it, preserve staging for review, and map existing input. Otherwise preflight the absent destination `test\input-prior-<old_manifest_hash>` and both renames, rename existing input to that prior name, then rename staging to exact `test\input`. Renames are same-volume directory moves. Never delete or overwrite either generation; if the first rename succeeds and the second fails, preserve both paths, record a blocked transition, perform no rollback, and launch nothing. Close the lock handle in `finally`; the lock file remains. Exactly `test\input`, revalidated after the rename while the lock is held, is mapped read-only. Tests cover concurrent publishers, same-hash reuse, first/second rename failure, partial-state preservation, prior-name collision, and a successful second and third run.
+
+- [ ] **Step 4: Implement exclusive run ownership before children.**
 
 ```powershell
 function New-HarnessRun {
- param([string]$EvidenceRoot,[string]$RunId)
- Assert-RunId $RunId; Assert-SafeTree (Split-Path $EvidenceRoot -Parent) $EvidenceRoot
- $run=Join-Path $EvidenceRoot $RunId; if(Test-Path -LiteralPath $run){throw "Run container exists: $run"}
- [IO.Directory]::CreateDirectory((Join-Path $run 'control'))|Out-Null; [IO.Directory]::CreateDirectory((Join-Path $run 'sandbox-output'))|Out-Null
- if(@(Get-ChildItem -LiteralPath (Join-Path $run 'sandbox-output') -Force).Count){throw 'sandbox-output is not empty'}
- [pscustomobject]@{RunId=$RunId;RunRoot=$run;ControlRoot=(Join-Path $run 'control');OutputRoot=(Join-Path $run 'sandbox-output')}
-}
-function Assert-StagedInput { param([string]$InputRoot)
-  $manifest=Read-JsonFile (Join-Path $InputRoot 'input-manifest.json'); $expected=@($manifest.files|ForEach-Object path); $actual=Get-ChildItem -LiteralPath $InputRoot -File -Recurse -Force|ForEach-Object {$_.FullName.Substring((ConvertTo-CanonicalPath $InputRoot).Length).TrimStart('\').Replace('\','/').ToLowerInvariant()}|Where-Object {$_ -ne 'input-manifest.json'}
-  foreach($name in $actual){if($expected -notcontains $name){throw "Unexpected staged input: $name"}}; foreach($entry in $manifest.files){$path=Assert-SafeTree $InputRoot (Join-Path $InputRoot $entry.path.Replace('/','\'));if(-not(Test-Path $path)){throw "Missing staged input: $($entry.path)"};if((Get-Sha256Hex $path) -cne $entry.sha256){throw "Staged hash mismatch: $($entry.path)"}}
+  param([string]$EvidenceRoot,[string]$RunId)
+  Assert-RunId $RunId|Out-Null;Assert-SafeTree (Split-Path $EvidenceRoot -Parent) $EvidenceRoot|Out-Null
+  $run=Join-Path $EvidenceRoot $RunId
+  try{[IO.Directory]::CreateDirectory($run)|Out-Null;Write-BytesCreateNew (Join-Path $run 'owner.claim') ([Text.UTF8Encoding]::new($false).GetBytes($RunId))}catch{throw "Run ownership collision: $RunId"}
+  try{[IO.Directory]::CreateDirectory((Join-Path $run 'control'))|Out-Null;[IO.Directory]::CreateDirectory((Join-Path $run 'sandbox-output'))|Out-Null}catch{throw "Owned run initialization failed: $RunId"}
+  [pscustomobject]@{RunId=$RunId;RunRoot=$run;ClaimPath=(Join-Path $run 'owner.claim');ControlRoot=(Join-Path $run 'control');OutputRoot=(Join-Path $run 'sandbox-output')}
 }
 ```
 
-Copy the selected tracked revision to a newly created sibling staging directory only after `Assert-SafeTree` rejects reparse points; create and validate the deterministic manifest; write it using `Write-JsonCreateNew` to staging and `control`; then rename staging to external `test\input` only when the dedicated prior input root is absent or a verified dedicated managed root. If replacement cannot be performed without delete/overwrite ambiguity, throw and retain the existing input root. The staged allowlist excludes all evidence, external legacy WSB/PS1 files, and unrelated test-root files.
+The shared `evidence` container is the only location touched before ownership. A loser may have participated in idempotent creation of the GUID directory, but failure to create `owner.claim` is final: it creates no child, control record, output, or file outside that shared run container. `owner.claim` deliberately contains only the run ID because it is adjacent to the mapped output; authoritative provenance remains create-new JSON under unmapped `control`. Tests synchronize two jobs at a barrier, repeat 100 times, and assert one owner, one loser, no loser writes, unchanged claim bytes, and no output contents.
 
-- [ ] **Step 4: Run staging tests and verify green.**
-
-Run: `Invoke-Pester .\scripts\windows-sandbox\tests\Launcher.Preflight.Tests.ps1 -Output Detailed`
-Expected: PASS; duplicate/malformed IDs, stale output, reparse input, extra/missing/hash-mismatched files, prior control collision, and non-atomic staging fail before launch.
-
-- [ ] **Step 5: Commit host staging.**
+- [ ] **Step 5: Run tests, verify green, and commit.**
 
 ```powershell
+Invoke-Pester .\scripts\windows-sandbox\tests\Launcher.Preflight.Tests.ps1 -Output Detailed
 git add scripts/windows-sandbox/Invoke-AgentManagerSandbox.ps1 scripts/windows-sandbox/tests/fixtures/input scripts/windows-sandbox/tests/Launcher.Preflight.Tests.ps1
-git commit -m "feat: stage sandbox inputs safely"
+git commit -m "feat: stage and claim sandbox runs safely"
 ```
 
-### Task 5: Generate Matched WSB Profiles And Bounded Launch Records
+Expected: PASS for concurrent claims, reparse sources, duplicate destinations, copy failure, target collision, prior selector preservation, repeated runs, and exact mapped input selection.
+
+### Task 5: Validate Configuration And Record Launch Chronology
 
 **Files:**
 - Modify: `scripts/windows-sandbox/Invoke-AgentManagerSandbox.ps1`
 - Modify: `scripts/windows-sandbox/tests/Launcher.Preflight.Tests.ps1`
 - Test: `scripts/windows-sandbox/tests/Launcher.Preflight.Tests.ps1`
 
-**Consumes:** fresh run object, descriptor, manifest hash, templates, and source revision.
-**Produces:** validated profile WSB plus immutable `control\launch.json` before the single Sandbox process starts.
+**Consumes:** owned run, exact descriptor/profile, selected input version, templates, and hashes.
+**Produces:** validated WSB, create-new `control\launch-intent.json`, then create-new `control\process.json` after process creation.
 
-- [ ] **Step 1: Write failing mapping/mismatch tests.**
+- [ ] **Step 1: Write failing tamper and chronology tests.**
 
 ```powershell
-It 'refuses profile disagreement before Start-Process' {
-  $run=[pscustomobject]@{RunId='00000000-0000-0000-0000-000000000001';ControlRoot='C:\t\evidence\r\control';OutputRoot='C:\t\evidence\r\sandbox-output'}
-  { New-Configuration -Scenario ([pscustomobject]@{id='path-refresh';network_mode='offline'}) -Profile online -Run $run -InputRoot 'C:\t\input' } | Should -Throw '*does not match*'
+It 'rejects every security-critical template mutation before process start' {
+  foreach($mutation in $mutations){$template=New-TamperedTemplate $mutation;{New-Configuration -TemplatePath $template -Scenario $scenario -Profile offline -Run $run -InputRoot $input}|Should -Throw;$startCalls|Should -Be 0}
 }
-It 'rejects child and parent mappings' {
-  { Assert-NonOverlappingMappings -InputRoot 'C:\t\input' -OutputRoot 'C:\t\input\out' -ControlRoot 'C:\t\evidence\r\control' } | Should -Throw '*overlap*'
+It 'writes intent before start and process identity after start' {
+  Invoke-OwnedLaunch -Run $run -StartApi $fakeStart
+  $events|Should -Be @('launch-intent.json','Start-Process','process.json')
+  (Read-JsonFile (Join-Path $run.ControlRoot 'process.json')).sandbox_host_process_id|Should -Be 4242
 }
 ```
 
-- [ ] **Step 2: Run profile tests and verify red.**
+- [ ] **Step 2: Run tests and verify red.**
 
 Run: `Invoke-Pester .\scripts\windows-sandbox\tests\Launcher.Preflight.Tests.ps1 -Output Detailed`
-Expected: FAIL because `New-Configuration` and mapping validation are absent.
 
-- [ ] **Step 3: Implement DOM generation and launch record.**
+Expected: FAIL because configuration and launch functions do not exist.
 
-```powershell
-function Assert-NonOverlappingMappings { param([string]$InputRoot,[string]$OutputRoot,[string]$ControlRoot)
- $all=@($InputRoot,$OutputRoot,$ControlRoot)|ForEach-Object{(ConvertTo-CanonicalPath $_)+'\'}
- for($i=0;$i -lt $all.Count;$i++){for($j=$i+1;$j -lt $all.Count;$j++){if($all[$i].StartsWith($all[$j],[StringComparison]::OrdinalIgnoreCase)-or $all[$j].StartsWith($all[$i],[StringComparison]::OrdinalIgnoreCase)){throw 'Mapping overlap'}}}
-}
-function New-Configuration { param($Scenario,[ValidateSet('offline','online')][string]$Profile,$Run,[string]$InputRoot)
- $actual=if($Scenario.network_mode -eq 'online'){'online'}else{'offline'}; if($Profile -ne $actual){throw 'Requested profile does not match descriptor'}
- Assert-NonOverlappingMappings $InputRoot $Run.OutputRoot $Run.ControlRoot
- [xml]$xml=Get-Content (Join-Path $PSScriptRoot "templates\agent-manager-sandbox-$Profile.wsb.xml") -Raw
- $maps=@($xml.Configuration.MappedFolders.MappedFolder); $maps[0].HostFolder=$InputRoot; $maps[1].HostFolder=$Run.OutputRoot
- $xml.Configuration.LogonCommand.Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\AgentManagerHarness\Input\Invoke-SandboxRunner.ps1 -ScenarioPath C:\AgentManagerHarness\Input\scenario.json -RunId $($Run.RunId) -Profile $Profile"
- $path=Join-Path $Run.ControlRoot "agent-manager-sandbox-$Profile.wsb"; $xml.Save($path); [xml]$check=Get-Content $path -Raw; if(@($check.Configuration.MappedFolders.MappedFolder).Count -ne 2){throw 'Invalid mapping count'}; $path
-}
-```
+- [ ] **Step 3: Generate, reload, and validate every configuration node.**
 
-Create `launch.json` with `Write-JsonCreateNew` before `Start-Process -FilePath $wsbPath -PassThru`; it contains run ID, scenario ID, profile, input manifest hash, configuration hash, source revision, launcher version, UTC start, explicit output relative name `sandbox-output`, and launched PID. The launcher may stop only that recorded PID after its bounded deadline.
+`New-Configuration` loads the exact route `templates\agent-manager-sandbox-$Profile.wsb.xml`, populates DOM text nodes, saves create-new under `control`, reloads that exact saved path, and rejects unless all conditions hold: root is exactly `Configuration`; `VGpu`, `ClipboardRedirection`, `PrinterRedirection`, `AudioInput`, and `VideoInput` are exactly `Disable`; `Networking` is exactly `Disable` offline or `Enable` online; `LogonCommand.Command` exactly equals the constructed runner command; there is exactly one `MappedFolders` node and exactly two `MappedFolder` children; map 0 has canonical exact host `InputRoot`, Sandbox path `C:\AgentManagerHarness\Input`, and `ReadOnly` text `true`; map 1 has canonical exact host `Run.OutputRoot`, Sandbox path `C:\AgentManagerHarness\Evidence`, and `ReadOnly` text `false`; no other element or attribute exists; neither run root nor control root is mapped; both host paths are non-overlapping and reparse-free.
 
-- [ ] **Step 4: Run profile tests and verify green.**
+Tests independently tamper each device, networking, command, root, attribute, element, map count/order, host path, Sandbox path, `ReadOnly`, extra map, parent map, and child map. Each case asserts `Start-Process` was never called.
 
-Run: `Invoke-Pester .\scripts\windows-sandbox\tests\Launcher.Preflight.Tests.ps1 -Output Detailed`
-Expected: PASS; tests prove the exact two maps, device policy, profile refusal, unmapped control/run roots, DOM-escaped values, and no process start on validation failure.
+- [ ] **Step 4: Implement immutable two-record launch provenance.**
 
-- [ ] **Step 5: Commit profile generation.**
+Before launch, create `control\launch-intent.json` with exact fields `schema_version`, `run_id`, `scenario_id`, `profile`, `input_manifest_hash`, `configuration_hash`, `source_revision`, `output_relative_name`, `command`, and `intent_at_utc`; it has no PID. Call only `Start-Process -FilePath $wsbPath -PassThru`. Immediately after return, create `control\process.json` with `schema_version`, `run_id`, `sandbox_host_process_id`, `sandbox_host_process_start_time_utc` read from the returned process, and `recorded_at_utc`. If process-record creation fails, stop only the returned process after verifying its PID/start-time identity, write create-new `launch-failure.json` if possible, and block collection.
+
+The collector consumes both immutable records. Runner completion copies the explicit run identity and configuration/input hashes passed in the logon command, but the host validates them against unmapped intent and process records. Tests prove an intent collision prevents launch, PID is absent from intent, process record cannot precede start, process collision triggers identity-checked stop, and no mutable record is used.
+
+- [ ] **Step 5: Run tests, verify green, and commit.**
 
 ```powershell
+Invoke-Pester .\scripts\windows-sandbox\tests\Launcher.Preflight.Tests.ps1 -Output Detailed
 git add scripts/windows-sandbox/Invoke-AgentManagerSandbox.ps1 scripts/windows-sandbox/tests/Launcher.Preflight.Tests.ps1
-git commit -m "feat: generate validated sandbox profiles"
+git commit -m "feat: validate and record sandbox launch"
 ```
 
-### Task 6: Implement Runner Preflight, Owned Process Trees, And Complete-Last Evidence
+### Task 6: Validate Declared Inputs And Clean Owned Process Trees
 
 **Files:**
 - Create: `scripts/windows-sandbox/Invoke-SandboxRunner.ps1`
@@ -388,170 +425,128 @@ git commit -m "feat: generate validated sandbox profiles"
 - Create: `scripts/windows-sandbox/tests/Runner.Evidence.Tests.ps1`
 - Test: `scripts/windows-sandbox/tests/Runner.Evidence.Tests.ps1`
 
-**Consumes:** read-only staged manifest/descriptor, run ID/profile, and the one output mapping.
-**Produces:** create-new evidence records and `complete.json` only after exact required records/fresh hashes exist.
+**Consumes:** strict descriptor/manifest, read-only input root, explicit run identity/profile/hashes, and output mapping.
+**Produces:** bounded fixture process execution, identity-aware descendant cleanup, failure evidence, and no broad kill.
 
-- [ ] **Step 1: Write failing ownership and completion tests.**
+- [ ] **Step 1: Write failing command-containment and process-tree tests.**
 
 ```powershell
-It 'kills only the recorded process tree and reports a cleanup failure' {
-  $calls=[Collections.Generic.List[int]]::new(); $api=@{GetChildren={param($id) if($id -eq 11){@(12)}else{@()}}; Stop={param($id) if($id -eq 12){throw 'access denied'};$calls.Add($id)}}
-  $result=Stop-OwnedProcessTree -RootProcessId 11 -Api $api
-  $calls | Should -Contain 11; $calls | Should -Not -Contain 99; $result.cleanup_status | Should -Be 'failed'; $result.failed_process_ids | Should -Contain 12
+It 'rejects traversal, absolute, unlisted, and non-fixture commands without launch' {
+  foreach($p in '..\evil.exe','C:\Windows\System32\cmd.exe','missing.ps1','Invoke-SandboxRunner.ps1'){ {Resolve-DeclaredProcess -InputRoot $input -Manifest $manifest -DeclaredProcess $p}|Should -Throw };$startCalls|Should -Be 0
 }
-It 'writes no completion marker when required evidence is absent' {
-  $identity=[pscustomobject]@{run_id='00000000-0000-0000-0000-000000000001';scenario_id='path-refresh';profile='offline';input_manifest_hash=('a'*64);configuration_hash=('b'*64);source_revision=('c'*40);started_at_utc='2026-07-14T00:00:00.0000000Z'}
-  $r=Finalize-Evidence -EvidenceRoot $TestDrive -RequiredEvidence @('results.tsv','screen.png') -Identity $identity
-  $r.status | Should -Be 'blocked'; Test-Path (Join-Path $TestDrive 'complete.json') | Should -BeFalse
+It 'stops descendants before parents by traversal depth and detects PID reuse' {
+  $result=Stop-OwnedProcessTree -RootIdentity $root -Api $api -DeadlineUtc $deadline
+  $calls|Should -Be @(13,12,11);$result.failed_process_ids|Should -Contain 14;$calls|Should -Not -Contain 99
 }
 ```
 
-- [ ] **Step 2: Run runner tests and verify red.**
+- [ ] **Step 2: Run tests and verify red.**
 
 Run: `Invoke-Pester .\scripts\windows-sandbox\tests\Runner.Evidence.Tests.ps1 -Output Detailed`
+
 Expected: FAIL because runner functions do not exist.
 
-- [ ] **Step 3: Implement runner validation, ownership, and finalization.**
+- [ ] **Step 3: Implement descriptor/process validation before launch.**
 
-`Assert-RunnerPreflight` calls `Assert-RunId`, re-hashes every manifest entry at `C:\AgentManagerHarness\Input`, rejects extra/missing input, and checks descriptor/profile before any declared process starts. It writes a minimal create-new `failure.json` if output is usable and exits nonzero; extraction is restricted to `%TEMP%\AgentManagerSandbox\$RunId`.
+`Assert-RunnerPreflight` validates both contracts, recomputes manifest payload bytes and every listed file hash, rejects extras, validates profile equality, and resolves `declared_process` by replacing `/` with `\`, combining under `C:\AgentManagerHarness\Input`, and applying canonical containment/reparse checks. Its normalized relative path must exactly match one manifest entry, must begin `tests/fixtures/input/fixture-`, must end `.ps1`, and must equal `tests/fixtures/input/fixture-<scenario_id>.ps1`. Resolve every `arguments` entry through the same containment/reparse procedure and require an exact manifest entry; pass the resulting canonical input paths as positional arguments to the fixed trusted `powershell.exe -NoProfile -ExecutionPolicy Bypass -File <declared fixture>` invocation. No argument is free-form or reparsed as command text. Tests cannot point process or arguments to the WSB, runner, product, installer, PowerShell executable, missing files, or arbitrary OS commands; fake `StartApi` is the only process API in Pester.
 
-```powershell
-function Stop-OwnedProcessTree { param([int]$RootProcessId,[hashtable]$Api)
- $queue=[Collections.Generic.Queue[int]]::new(); $seen=[Collections.Generic.HashSet[int]]::new(); $queue.Enqueue($RootProcessId); $ordered=[Collections.Generic.List[int]]::new()
- while($queue.Count){$id=$queue.Dequeue();if($seen.Add($id)){foreach($child in & $Api['GetChildren'] $id){$queue.Enqueue([int]$child)};$ordered.Add($id)}}
- $failed=[Collections.Generic.List[int]]::new(); foreach($id in @($ordered|Sort-Object -Descending)){try{& $Api['Stop'] $id}catch{$failed.Add($id)}}
- [pscustomobject]@{cleanup_status=if($failed.Count){'failed'}else{'succeeded'};failed_process_ids=@($failed);owned_process_ids=@($ordered)}
-}
-function Finalize-Evidence { param([string]$EvidenceRoot,[string[]]$RequiredEvidence,$Identity)
- $hashes=[ordered]@{}; foreach($name in $RequiredEvidence){$path=Assert-SafeTree $EvidenceRoot (Join-Path $EvidenceRoot $name);if(-not(Test-Path $path)-or (Get-Item $path).Length -eq 0){return [pscustomobject]@{status='blocked'}};$hashes[$name]=Get-Sha256Hex $path}
- $complete=[ordered]@{run_id=$Identity.run_id;scenario_id=$Identity.scenario_id;profile=$Identity.profile;input_manifest_hash=$Identity.input_manifest_hash;configuration_hash=$Identity.configuration_hash;source_revision=$Identity.source_revision;started_at_utc=$Identity.started_at_utc;ended_at_utc=(Get-Date).ToUniversalTime().ToString('o');status='complete';evidence_hashes=$hashes;finalized_at_utc=(Get-Date).ToUniversalTime().ToString('o')}
- Write-JsonCreateNew (Join-Path $EvidenceRoot 'complete.json') $complete; [pscustomobject]@{status='complete';complete=$complete}
-}
-```
+- [ ] **Step 4: Implement bounded, identity-aware post-order cleanup.**
 
-Start only `declared_process` using `Start-Process -PassThru`; query its descendants by parent PID, apply `timeout_seconds`, and call `Stop-OwnedProcessTree` only with that returned root PID. Record a cleanup failure in a create-new record, return failure/blocked, and never terminate by image name or product-name pattern. Remove only the validated sandbox-local temporary directory in `finally` after finalization attempt.
+Represent identity as `{process_id,parent_process_id,creation_time_utc}` from CIM. Starting at the returned root PID/start time, repeatedly snapshot descendants whose current parent identity matches the recorded parent and whose creation time is not earlier than the parent. Build `(identity, depth)` nodes by traversal, sort by depth descending using `[Array]::Sort` with a comparison delegate, and stop descendants before parents. Immediately before each stop, reload PID, parent PID, and creation time; mismatch records `pid_reused` and is never stopped.
 
-- [ ] **Step 4: Run runner tests and verify green.**
+After each deepest-first pass, rescan surviving owned parents for newly appearing children until two consecutive empty scans or the cleanup deadline. Wait only within the bounded deadline. Record each access denial, surviving identity, PID reuse, and late child in create-new `cleanup.json`; any such condition makes cleanup `failed`, prevents `complete.json`, and never falls back to image/product-name termination. Pester fake snapshots model 11 -> 12 -> 13, a late child 14, reused PID 12, access denial, disappearing nodes, and unrelated PID 99, and assert true traversal order rather than numeric PID order.
 
-Run: `Invoke-Pester .\scripts\windows-sandbox\tests\Runner.Evidence.Tests.ps1 -Output Detailed`
-Expected: PASS; test proves spawned descendant IDs are stopped, unrelated PID 99 is untouched, failed descendant stop is recorded, no `complete.json` follows failure, collisions throw, and complete marker includes every schema-required identity/timestamp/hash field.
-
-- [ ] **Step 5: Commit runner evidence.**
+- [ ] **Step 5: Run tests, verify green, and commit.**
 
 ```powershell
+Invoke-Pester .\scripts\windows-sandbox\tests\Runner.Evidence.Tests.ps1 -Output Detailed
 git add scripts/windows-sandbox/Invoke-SandboxRunner.ps1 scripts/windows-sandbox/tests/fixtures/evidence scripts/windows-sandbox/tests/Runner.Evidence.Tests.ps1
-git commit -m "feat: finalize sandbox evidence safely"
+git commit -m "feat: enforce owned sandbox execution"
 ```
 
-### Task 7: Collect, Validate, And Archive By Explicit Canonical Run ID
+### Task 7: Finalize And Collect Complete Evidence
 
 **Files:**
+- Modify: `scripts/windows-sandbox/Invoke-SandboxRunner.ps1`
 - Modify: `scripts/windows-sandbox/Invoke-AgentManagerSandbox.ps1`
+- Modify: `scripts/windows-sandbox/tests/Runner.Evidence.Tests.ps1`
 - Modify: `scripts/windows-sandbox/tests/Launcher.Preflight.Tests.ps1`
+- Test: `scripts/windows-sandbox/tests/Runner.Evidence.Tests.ps1`
 - Test: `scripts/windows-sandbox/tests/Launcher.Preflight.Tests.ps1`
 
-**Consumes:** explicit canonical run ID returned by launcher, matching unmapped `control\launch.json`, `control\input-manifest.json`, generated WSB, and that run's `sandbox-output`.
-**Produces:** create-new `control\collection.json` and optional create-new `control\archive.json`, never a sibling scan or mutable archive mapping.
+**Consumes:** required evidence, cleanup result, explicit run ID, unmapped claim/intent/process/manifest/configuration records, and one output child.
+**Produces:** create-new `complete.json` written last by runner and create-new `control\collection.json` written after full host recomputation.
 
-- [ ] **Step 1: Write failing collector and archive tests.**
-
-```powershell
-It 'rejects a marker that differs from unmapped control records' {
-  $launch=[pscustomobject]@{run_id='00000000-0000-0000-0000-000000000001';scenario_id='path-refresh';profile='offline';input_manifest_hash=('a'*64);configuration_hash=('b'*64);source_revision=('c'*40)}
-  $complete=[pscustomobject]@{run_id=$launch.run_id;scenario_id=$launch.scenario_id;profile=$launch.profile;input_manifest_hash=('d'*64);configuration_hash=$launch.configuration_hash;source_revision=$launch.source_revision;status='complete'}
-  { Assert-CollectedEvidence -Launch $launch -Complete $complete } | Should -Throw '*input_manifest_hash*'
-}
-It 'refuses an archive path outside the same control directory' {
-  { New-ArchiveRecord -ControlRoot 'C:\evidence\r\control' -ArchivePath 'C:\evidence\other\archive.json' -RunId '00000000-0000-0000-0000-000000000001' } | Should -Throw '*outside root*'
-}
-```
-
-- [ ] **Step 2: Run collector tests and verify red.**
-
-Run: `Invoke-Pester .\scripts\windows-sandbox\tests\Launcher.Preflight.Tests.ps1 -Output Detailed`
-Expected: FAIL because collector functions do not exist.
-
-- [ ] **Step 3: Implement canonical collection and archive record.**
+- [ ] **Step 1: Write failing finalization and collector tests.**
 
 ```powershell
-function Assert-CollectedEvidence { param($Launch,$Complete)
- foreach($name in 'run_id','scenario_id','profile','input_manifest_hash','configuration_hash','source_revision'){if($Launch.$name -cne $Complete.$name){throw "Evidence mismatch: $name"}}
- if($Complete.status -ne 'complete'){throw 'Evidence is not complete'}
- foreach($entry in $Complete.evidence_hashes.psobject.Properties){if($entry.Value -notmatch '^[0-9a-f]{64}$'){throw "Invalid evidence hash: $($entry.Name)"}}
-}
-function Get-RunControlRecord { param([string]$RunId,[string]$EvidenceRoot)
- Assert-RunId $RunId; $run=Assert-SafeTree $EvidenceRoot (Join-Path $EvidenceRoot $RunId); $control=Assert-SafeTree $run (Join-Path $run 'control'); $launch=Read-JsonFile (Join-Path $control 'launch.json')
- if($launch.run_id -cne $RunId -or $launch.output_relative_name -cne 'sandbox-output'){throw 'Invalid canonical launch record'}
- [pscustomobject]@{run_id=$RunId;control_root=$control;output_root=(Assert-SafeTree $run (Join-Path $run 'sandbox-output'));launch=$launch}
-}
-function New-ArchiveRecord { param([string]$ControlRoot,[string]$ArchivePath,[string]$RunId)
- Assert-RunId $RunId; $target=Assert-SafeTree $ControlRoot $ArchivePath
- Write-JsonCreateNew $target ([ordered]@{run_id=$RunId;created_at_utc=(Get-Date).ToUniversalTime().ToString('o');kind='validated-evidence-index'})
-}
+It 'does not complete after cleanup failure or with an extra file' { {Finalize-Evidence -EvidenceRoot $root -CleanupStatus failed -RequiredEvidence @('results.tsv') -Identity $identity}|Should -Throw;Test-Path (Join-Path $root 'complete.json')|Should -BeFalse }
+It 'rejects changed current evidence and impossible chronology' { {Assert-CollectedRun -RunId $id -EvidenceRoot $evidence}|Should -Throw '*hash*';Test-Path (Join-Path $control 'collection.json')|Should -BeFalse }
 ```
 
-The collector derives `OutputRoot` solely as `Join-Path $Run.ControlRoot '..\sandbox-output'` after canonical containment and validates the path is exactly the run container's output child; it does not enumerate `test\evidence`. It loads `control\launch.json` with `Read-JsonFile`, compares all completion fields and each current output file hash to `complete.json`, applies a documented 120-second UTC skew allowance, and writes `collection.json` create-new with accepted/failed/blocked result. Archiving is a control-only index record created as `control\archive.json` after validation; it contains the explicit run ID, canonical manifest/config hashes, and accepted file hashes, does not copy/extract files, and cannot traverse or overwrite.
+- [ ] **Step 2: Run tests and verify red.**
 
-- [ ] **Step 4: Run collector tests and verify green.**
+Run: `Invoke-Pester .\scripts\windows-sandbox\tests\Runner.Evidence.Tests.ps1, .\scripts\windows-sandbox\tests\Launcher.Preflight.Tests.ps1 -Output Detailed`
 
-Run: `Invoke-Pester .\scripts\windows-sandbox\tests\Launcher.Preflight.Tests.ps1 -Output Detailed`
-Expected: PASS; wrong identity/hash/revision/timestamp, malformed final marker, missing fresh output, sibling output, archive traversal, archive collision, Sandbox timeout, and cleanup failure remain failed or blocked with partial evidence retained.
+Expected: FAIL because complete collection is not implemented.
 
-- [ ] **Step 5: Commit collector policy.**
+- [ ] **Step 3: Implement runner complete-last semantics.**
+
+Allowed output before completion is exactly descriptor `required_evidence` plus `started.json`, `runner-process.json`, and `cleanup.json`; `failure.json` is allowed only on a failed run and precludes completion. Re-enumerate with reparse checks, reject directories and any extra/unlisted file, require nonempty required evidence, and recalculate all current hashes. Validate `started <= process start <= ended <= finalized`, cleanup exactly `succeeded`, and explicit run identity. Construct the strict complete object, validate it, then write `complete.json` create-new as the final filesystem operation. No cleanup or evidence mutation follows it; cleanup failure, collision, or validation failure preserves partial output and precludes completion.
+
+- [ ] **Step 4: Implement collector full recomputation from explicit identity.**
+
+`Get-RunControlRecord` accepts only caller `RunId`, validates it, derives exactly `EvidenceRoot\RunId`, validates `owner.claim` bytes equal RunId, and derives only `control` and `sandbox-output`; it never enumerates `EvidenceRoot`. The collector validates strict intent, host-process, manifest, and complete contracts; recomputes configuration file hash and manifest payload/file hashes; compares every shared identity/hash/profile/revision field; separately validates host WSB PID/start identity and declared fixture PID; validates `intent <= sandbox_host_process_start <= started <= ended <= finalized <= collection` with at most 120 seconds host/Sandbox clock skew; rejects cleanup other than succeeded; re-enumerates output; rejects any directory, reparse, missing file, changed hash, or file not in the allowed complete set; and recalculates every current evidence hash rather than trusting prior values.
+
+Only after all checks pass, write `control\collection.json` create-new with accepted hashes and collection UTC. A failed collection writes create-new `collection-failure.json` when possible, never `collection.json`, never changes output, and preserves all records. `control\archive.json` is an optional create-new index after accepted collection and contains the same explicit run ID/current hashes; it copies and extracts nothing.
+
+- [ ] **Step 5: Run tests, verify green, and commit.**
 
 ```powershell
-git add scripts/windows-sandbox/Invoke-AgentManagerSandbox.ps1 scripts/windows-sandbox/tests/Launcher.Preflight.Tests.ps1
-git commit -m "feat: collect sandbox evidence by run id"
+Invoke-Pester .\scripts\windows-sandbox\tests\Runner.Evidence.Tests.ps1, .\scripts\windows-sandbox\tests\Launcher.Preflight.Tests.ps1 -Output Detailed
+git add scripts/windows-sandbox/Invoke-SandboxRunner.ps1 scripts/windows-sandbox/Invoke-AgentManagerSandbox.ps1 scripts/windows-sandbox/tests/Runner.Evidence.Tests.ps1 scripts/windows-sandbox/tests/Launcher.Preflight.Tests.ps1
+git commit -m "feat: finalize and collect sandbox evidence"
 ```
 
-### Task 8: Document Fail-Closed Migration, Rollback, And Future Execution
+Expected: PASS for extra/missing/changed files, malformed contracts, run mismatch, timestamp inversion/skew, claim mismatch, configuration/manifest recomputation, cleanup failure, complete collision, and explicit-run-only collection.
+
+### Task 8: Quarantine Legacy Files And Document Future Execution
 
 **Files:**
 - Create: `scripts/windows-sandbox/README.md`
+- Modify: `scripts/windows-sandbox/Invoke-AgentManagerSandbox.ps1`
 - Modify: `scripts/windows-sandbox/tests/Launcher.Preflight.Tests.ps1`
 - Modify: `scripts/windows-sandbox/tests/Scenario.Matrix.Tests.ps1`
 - Test: `scripts/windows-sandbox/tests/Launcher.Preflight.Tests.ps1`
 - Test: `scripts/windows-sandbox/tests/Scenario.Matrix.Tests.ps1`
 
-**Consumes:** versioned harness, external legacy file locations, explicit run ID, and accepted control records.
-**Produces:** executable future-only protocol that inventories and retires unsafe legacy files without launching them and never restores their broad mapping.
+**Consumes:** two exact legacy sources, explicit quarantine destinations, accepted static preflight, and new run control.
+**Produces:** preflighted create-new provenance and fail-closed quarantine with blocked partial-move recovery, plus future-only commands.
 
-- [ ] **Step 1: Write failing documentation-contract tests.**
+- [ ] **Step 1: Write failing two-source preflight and partial-move tests.**
 
 ```powershell
-It 'documents read-only legacy inventory and no unsafe fallback' {
- $text=Get-Content "$PSScriptRoot/../README.md" -Raw
- $text|Should -Match 'Get-Content -LiteralPath D:\\codex\\ai-deploy-toolkit\\test\\agent-manager-test.wsb'
- $text|Should -Match 'never launch the legacy files'
- $text|Should -Match 'never restore.*writable test-root mapping'
-}
+It 'moves neither source when any destination exists' { {Move-LegacyHarnessToQuarantine -TestRoot $root -ControlRoot $control -RunId $id}|Should -Throw;Test-Path $wsb|Should -BeTrue;Test-Path $runner|Should -BeTrue }
+It 'records a partial move as blocked without rollback or launch' { {Move-LegacyHarnessToQuarantine -TestRoot $root -ControlRoot $control -RunId $id -MoveApi $failSecond}|Should -Throw;(Read-JsonFile (Join-Path $control 'legacy-quarantine-failure.json')).status|Should -Be 'blocked';$launchCalls|Should -Be 0 }
 ```
 
-- [ ] **Step 2: Run documentation tests and verify red.**
+- [ ] **Step 2: Run tests and verify red.**
 
 Run: `Invoke-Pester .\scripts\windows-sandbox\tests\Launcher.Preflight.Tests.ps1, .\scripts\windows-sandbox\tests\Scenario.Matrix.Tests.ps1 -Output Detailed`
-Expected: FAIL because the runtime protocol does not exist.
 
-- [ ] **Step 3: Write the concrete protocol and future-only commands.**
+Expected: FAIL because quarantine and documentation do not exist.
 
-The README states that migration reads, but never launches, `D:\codex\ai-deploy-toolkit\test\agent-manager-test.wsb` and `D:\codex\ai-deploy-toolkit\test\run-agent-manager-sandbox.ps1` with `Get-Content -LiteralPath`; inventory is saved through `Write-JsonCreateNew` in a new run's unmapped control directory. After static Pester preflight passes, future implementation can archive legacy files to a timestamped host location using an explicit operator-approved source/destination and only after `Assert-SafeTree` and reparse validation; it must fail if the destination exists, never delete the source, and never launch either legacy file. Rollback selects a prior validated tracked `scripts\windows-sandbox` Git revision in an isolated checkout, stages it into a new input/run ID, and proves a complete offline record without restoring the old writable test-root map.
+- [ ] **Step 3: Implement fail-closed quarantine and provenance.**
 
-Add this host-only function to `Invoke-AgentManagerSandbox.ps1`; it is invoked only after Pester preflight and a new run's `control\legacy-inventory.json` exists, never by a Sandbox logon command:
+Preflight both exact sources `agent-manager-test.wsb` and `run-agent-manager-sandbox.ps1` and both exact destinations under `test\retired\<RunId>` before either move: validate test/control/retired containment and every ancestor, reject reparses, require both regular sources, require destination directory newly created and empty, and require both targets absent. Hash both sources and write `control\legacy-inventory.json` create-new before moves. Move source one then source two without overwrite. After each move, verify destination hash and source absence. Write `legacy-quarantine.json` create-new only after both succeed.
 
-```powershell
-function Move-LegacyHarnessToQuarantine {
-  param([string]$TestRoot,[string]$ControlRoot,[string]$RunId)
-  Assert-RunId $RunId; $wsb=Assert-SafeTree $TestRoot (Join-Path $TestRoot 'agent-manager-test.wsb'); $runner=Assert-SafeTree $TestRoot (Join-Path $TestRoot 'run-agent-manager-sandbox.ps1')
-  $inventory=[ordered]@{run_id=$RunId;read_at_utc=(Get-Date).ToUniversalTime().ToString('o');files=@([ordered]@{path=$wsb;sha256=Get-Sha256Hex $wsb},[ordered]@{path=$runner;sha256=Get-Sha256Hex $runner})}
-  Write-JsonCreateNew (Join-Path $ControlRoot 'legacy-inventory.json') $inventory
-  $retired=Join-Path $TestRoot (Join-Path 'retired' $RunId); [IO.Directory]::CreateDirectory($retired)|Out-Null
-  foreach($source in @($wsb,$runner)){Assert-NoReparsePath $source; $target=Assert-SafeTree $retired (Join-Path $retired (Split-Path $source -Leaf)); if(Test-Path -LiteralPath $target){throw "Legacy target exists: $target"}; Move-Item -LiteralPath $source -Destination $target -ErrorAction Stop}
-}
-```
+If either move or verification fails, write `legacy-quarantine-failure.json` create-new with per-source states and `status: blocked`; preserve the partial source/destination state, perform no rollback, delete nothing, launch nothing, and require operator review. A preflight failure moves neither source. Tests inject first/second failures, destination collision, source disappearance, reparse, hash change, and provenance collision.
 
-The README must direct operators to stop immediately if inventory or either move fails, preserve the source/partial quarantine state for review, and use neither archived file as an execution fallback.
+- [ ] **Step 4: Document future-only Windows commands and honest macOS boundary.**
 
-Add the following commands verbatim under **FUTURE EXECUTION ONLY - DO NOT RUN DURING IMPLEMENTATION**. Each command uses the exact worktree and each descriptor's declared profile:
+README labels all ten launcher commands **FUTURE EXECUTION ONLY - DO NOT RUN DURING IMPLEMENTATION**, uses the exact authorized worktree, routes only `proxy-failure` online and the other nine offline, and states Sandbox/product/installers must not be launched by implementation or tests. It requires explicit returned run IDs for collection and forbids searching peer evidence directories. It documents rollback as selecting a validated tracked revision in an isolated checkout and creating a new input generation/run, never restoring the broad writable mapping. It states all 18 macOS cases require respective real disposable Intel/Apple Silicon hardware and static fixture/hash/ZIP/Mach-O/source observations do not satisfy interaction acceptance.
+
+The README includes these exact gated commands:
 
 ```powershell
 Set-Location D:\codex\ai-deploy-toolkit\apps\agent-manager\.worktrees\installation-orchestrator
@@ -567,25 +562,15 @@ Set-Location D:\codex\ai-deploy-toolkit\apps\agent-manager\.worktrees\installati
 .\scripts\windows-sandbox\Invoke-AgentManagerSandbox.ps1 -ScenarioId postflight-path-version -Profile offline -TestRoot D:\codex\ai-deploy-toolkit\test
 ```
 
-For a returned launcher run ID, use only `Get-RunControlRecord -RunId $runId -EvidenceRoot D:\codex\ai-deploy-toolkit\test\evidence` and `New-ArchiveRecord -ControlRoot $record.control_root -ArchivePath (Join-Path $record.control_root 'archive.json') -RunId $runId`; do not choose newest output, enumerate sibling evidence, extract ZIP files, or create writable archive mappings.
-
-- [ ] **Step 4: Run documentation tests and all static tests.**
+- [ ] **Step 5: Run tests, verify green, and commit.**
 
 ```powershell
-Invoke-Pester .\scripts\windows-sandbox\tests -Output Detailed
-git diff --check
+Invoke-Pester .\scripts\windows-sandbox\tests\Launcher.Preflight.Tests.ps1, .\scripts\windows-sandbox\tests\Scenario.Matrix.Tests.ps1 -Output Detailed
+git add scripts/windows-sandbox/README.md scripts/windows-sandbox/Invoke-AgentManagerSandbox.ps1 scripts/windows-sandbox/tests/Launcher.Preflight.Tests.ps1 scripts/windows-sandbox/tests/Scenario.Matrix.Tests.ps1
+git commit -m "docs: define safe sandbox migration"
 ```
 
-Expected: PASS; Pester uses only fixtures/TestDrive and launches no Sandbox, MSI, EXE, WebView installer, or product process.
-
-- [ ] **Step 5: Commit operational documentation.**
-
-```powershell
-git add scripts/windows-sandbox/README.md scripts/windows-sandbox/tests/Launcher.Preflight.Tests.ps1 scripts/windows-sandbox/tests/Scenario.Matrix.Tests.ps1
-git commit -m "docs: document hardened sandbox migration"
-```
-
-### Task 9: Future-Only Disposable Acceptance
+### Task 9: Static Verification And Future Disposable Acceptance
 
 **Files:**
 - Create: `docs/superpowers/verification/2026-07-14-windows-sandbox-harness-hardening.md`
@@ -594,36 +579,31 @@ git commit -m "docs: document hardened sandbox migration"
 - Test: `scripts/windows-sandbox/tests/Runner.Evidence.Tests.ps1`
 - Test: `scripts/windows-sandbox/tests/Scenario.Matrix.Tests.ps1`
 
-**Consumes:** implementation commits, explicit launcher run IDs, canonical control records, disposable Windows Sandbox, and separate disposable macOS Intel/Apple Silicon environments.
-**Produces:** honest Windows interaction evidence and a separately blocked or observed macOS report.
+**Consumes:** implementation commits, static tests, explicit future run IDs, and disposable platform environments.
+**Produces:** static verification first; later, separately labeled Windows interaction evidence and blocked/observed native macOS evidence.
 
-- [ ] **Step 1: Run static preflight before future execution.**
-
-Run from `D:\codex\ai-deploy-toolkit\apps\agent-manager\.worktrees\installation-orchestrator`:
+- [ ] **Step 1: Run static preflight without launching external processes.**
 
 ```powershell
 Invoke-Pester .\scripts\windows-sandbox\tests -Output Detailed
 git diff --check
 ```
 
-Expected: PASS before any launch; record the exact harness commit and Pester result in the verification document.
+Expected: PASS using only fixtures, `TestDrive`, and mocked process APIs; record exact commit and results.
 
-- [ ] **Step 2: Execute the ten Windows descriptors only in a disposable Sandbox.**
+- [ ] **Step 2: Gate the ten Windows scenarios to a disposable Sandbox.**
 
-Run: the ten explicitly listed **FUTURE EXECUTION ONLY** commands in Task 8, once each, with their declared profile.
-Expected: every accepted run returns its explicit canonical run ID, retains unchanged control/input boundaries, changes only its named `sandbox-output`, and has matching input-manifest/configuration/source hashes, declared evidence, and final completion record.
+Only after explicit operator approval, run the ten commands listed in README on a disposable Windows Sandbox host. Expected: each returns one explicit run ID; failures remain failed/blocked and preserved. Static success alone is not Windows interaction acceptance.
 
-- [ ] **Step 3: Validate and archive every returned run by its explicit ID.**
+- [ ] **Step 3: Collect each Windows run only by its returned ID.**
 
-Run: `Get-RunControlRecord -RunId $runId -EvidenceRoot D:\codex\ai-deploy-toolkit\test\evidence` followed by `New-ArchiveRecord` exactly as Task 8 specifies for each returned ID.
-Expected: control and output records match; crash, timeout, cleanup failure, timestamp violation, missing file, stale hash, or absent completion marker is failed/blocked and preserved rather than accepted.
+For each returned ID, call `Get-RunControlRecord -RunId $runId -EvidenceRoot D:\codex\ai-deploy-toolkit\test\evidence`, then collect/archive that exact record. Expected: only fully recomputed, cleanup-successful evidence is accepted.
 
-- [ ] **Step 4: Record macOS evidence without static equivalence.**
+- [ ] **Step 4: Record native macOS outcomes without equivalence claims.**
 
-Run each of the nine Intel and nine Apple Silicon scenarios only on the respective real disposable macOS environment.
-Expected: a platform case is accepted only with native interaction logs/screenshots and recorded OS/architecture; unavailable hardware remains `BLOCKED`, while Windows, static, hash, ZIP, or Mach-O results never change macOS acceptance.
+Run nine Intel and nine Apple Silicon scenarios only on their respective real disposable hardware. Expected: unavailable cases stay `BLOCKED`; only native interaction logs/screenshots with OS and architecture can be accepted.
 
-- [ ] **Step 5: Commit the future verification record.**
+- [ ] **Step 5: Commit the verification record.**
 
 ```powershell
 git add docs/superpowers/verification/2026-07-14-windows-sandbox-harness-hardening.md
@@ -632,11 +612,18 @@ git commit -m "docs: verify sandbox harness hardening"
 
 ## Acceptance Criteria And Self-Review
 
-- Tasks 1-2 define all named helpers, canonical containment/reparse traversal, deterministic serialization/hash, strict GUID parsing, create-new records, exact schemas, and DOM-safe WSB policy.
-- Tasks 3-5 encode all ten Windows and eighteen macOS cases, external immutable staging, fresh unmapped control/output ownership, profile mismatch refusal, and exact mapping validation.
-- Tasks 6-7 prove manifest revalidation, explicit owned process-tree cleanup, cleanup failure recording, complete-last evidence, canonical collector comparisons, no sibling scan, and create-new control archive indexing.
-- Tasks 8-9 provide read-only legacy inventory, fail-closed retirement, isolated tracked rollback, exact future Windows commands, and real macOS-only interactive acceptance.
-- Review scans must reject unresolved planning markers, ellipses, wrong worktree roots, undefined helper names, broad filesystem erasure, image-name process termination, sibling-run selection, archive extraction, and wording that converts macOS static evidence into interaction evidence. Reconcile every Files/Consumes/Produces declaration, function signature, schema field, descriptor ID/profile, command, expected red/green result, and commit path before execution.
+- Alternative B and the locked file tree remain unchanged: immutable read-only input, unmapped control, and one fresh writable output.
+- Run ownership is a create-new marker before child creation; concurrency has one owner, losers fail closed, and provenance is reconciled with unmapped control.
+- Launch chronology uses immutable intent before launch and immutable process identity after launch.
+- Manifest ordering is ordinal and its exact BOM-free payload bytes exclude `manifest_hash`; host and Sandbox reconstruct identical bytes.
+- Runtime enforcement uses repository-owned explicit validators matching complete documentation schemas, with adversarial coverage of fields, types, patterns, arrays, uniqueness, and bounds.
+- Configuration reload validates every exact security node, command, mapping, `ReadOnly` value, and absence of extras before process start.
+- Staging is same-volume, allowlisted, reparse-safe, immutable, failure-preserving, and never deletes or overwrites prior input.
+- Cleanup is identity-aware post-order traversal with bounded rescans, PID-reuse defense, no broad kill, and completion blocked on any failure.
+- Declared process and arguments are manifest-contained fixture inputs, so tests cannot launch Sandbox or product commands.
+- Finalization and collection re-enumerate and rehash all current evidence, validate chronology/run identity, reject extras, and write completion last only after cleanup success.
+- Legacy quarantine preflights both sources/destinations, uses create-new provenance, blocks partial moves without rollback, and never launches or deletes legacy files.
+- Review every snippet for Windows PowerShell 5.1 syntax/API availability, defined helpers, TOCTOU boundaries, path-root edges, reparse traversal, safe move behavior, matching field names, and honest expected results.
 
 Plan complete and saved to `docs/superpowers/plans/2026-07-14-windows-sandbox-harness-hardening.md`. Two execution options:
 
