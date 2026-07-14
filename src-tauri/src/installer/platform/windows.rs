@@ -64,7 +64,9 @@ fn path_entries_from_registry_values(
         .filter(|value| !value.trim().is_empty())
         .collect::<Vec<_>>()
         .join(";");
-    let entries = std::env::split_paths(std::ffi::OsStr::new(&joined)).collect::<Vec<_>>();
+    let entries = std::env::split_paths(std::ffi::OsStr::new(&joined))
+        .filter(|entry| !entry.as_os_str().is_empty())
+        .collect::<Vec<_>>();
     (!entries.is_empty())
         .then_some(entries)
         .ok_or_else(|| InstallFailure {
