@@ -145,7 +145,7 @@ pub fn classify_process_failure(
                 "installer.failure.tls_failure",
             )
         } else {
-            fallback_classification(stage)
+            fallback_classification(stage.clone())
         };
 
     let detail = truncate_tail(&full_redacted, 12);

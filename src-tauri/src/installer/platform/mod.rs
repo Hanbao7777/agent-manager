@@ -97,7 +97,7 @@ pub fn resolve_node_release(
         if !policy.accepts_major(major) {
             continue;
         }
-        let Some(asset_name) = adapter.asset_name(version, architecture) else {
+        let Some(asset_name) = adapter.asset_name(version, architecture.clone()) else {
             continue;
         };
         if !row
