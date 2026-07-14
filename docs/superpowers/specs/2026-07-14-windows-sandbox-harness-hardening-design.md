@@ -13,8 +13,10 @@ Make Windows Sandbox test execution consume immutable, hash-validated staged inp
 ### Definitions
 
 - **Input root**: host `test\input`, containing only staged harness inputs required by a run: the runner script, selected artifact(s), checksum material, approved runtime prerequisite(s), scenario descriptor, and input manifest.
-- **Evidence root**: host `test\evidence`, owned by the host-side launcher and containing only run directories.
-- **Run directory**: `test\evidence\<run-id>`, where `<run-id>` is a newly generated UUID-like identifier created once by the host-side launcher. It is the only host path writable from that run's Sandbox.
+- **Evidence root**: host `test\evidence`, owned by the host-side launcher and containing only run containers.
+- **Run container**: host `test\evidence\<run-id>`, where `<run-id>` is a newly generated UUID-like identifier created once by the host-side launcher. It is never mapped into the Sandbox and contains both host-controlled records and one Sandbox-output child.
+- **Control directory**: host `test\evidence\<run-id>\control`, inside the unmapped run container. It holds the canonical input manifest, generated Sandbox configuration, launch record, and host collection result. The Sandbox cannot write this directory.
+- **Sandbox-output directory**: host `test\evidence\<run-id>\sandbox-output`, a newly created empty child of the run container. It is the only host path writable from that run's Sandbox.
 - **Online scenario**: a scenario explicitly marked `network_mode: online` in its staged scenario descriptor because it validates an approved download or network-failure path.
 - **Offline scenario**: every scenario not explicitly marked online. It executes with Windows Sandbox networking disabled.
 - **Controlled export**: a host-side post-execution collection step that copies only declared, completed evidence from a sandbox-local location after the Sandbox has exited. It is an alternative architecture, not the recommended approach.
@@ -36,15 +38,19 @@ Conceptual paths are fixed as follows:
 | Purpose | Host path | Sandbox path | Access from Sandbox |
 | --- | --- | --- | --- |
 | Immutable staged inputs | `D:\codex\ai-deploy-toolkit\test\input` | `C:\AgentManagerHarness\Input` | Read-only |
-| Isolated evidence for one run | `D:\codex\ai-deploy-toolkit\test\evidence\<run-id>` | `C:\AgentManagerHarness\Evidence` | Read-write |
+| Host-controlled run records | `D:\codex\ai-deploy-toolkit\test\evidence\<run-id>\control` | Not mapped | No Sandbox access |
+| Isolated Sandbox output for one run | `D:\codex\ai-deploy-toolkit\test\evidence\<run-id>\sandbox-output` | `C:\AgentManagerHarness\Evidence` | Read-write |
 | Ephemeral extracted files and installer work | none | `%TEMP%\AgentManagerSandbox\<run-id>` | Sandbox-local |
 
-The host-side launcher creates `test\input` only through controlled staging, creates a fresh run directory, and generates the selected `.wsb` from the matching online/offline template. The Sandbox never receives a writable mapping of `test`, `test\input`, the repository, a parent of `test\evidence`, or a directory that contains another run's evidence.
+The host-side launcher creates `test\input` only through controlled staging, creates a fresh run container with separate `control` and empty `sandbox-output` children, and generates the selected `.wsb` from the matching online/offline template. The Sandbox never receives a writable mapping of `test`, `test\input`, the repository, the evidence root, a run container, the control directory, or a directory that contains another run's output.
+
+Future harness source of truth is a tracked `scripts\windows-sandbox\` directory in this feature repository, alongside the existing tracked `scripts\` utilities. It will contain versioned online/offline `.wsb` templates, the host launcher, the Sandbox runner, schema/fixture files, and documentation; the launcher stages an identified revision of those files into the external `test\input` runtime location. The existing external `D:\codex\ai-deploy-toolkit\test` `.wsb` and PowerShell files are not in this Git repository and are neither a source of truth nor a rollback target.
 
 ## Constraints
 
 - Inputs and evidence must never share a writable Sandbox mapping or a mapped parent path.
-- A selected `.wsb` must map `test\input` read-only and exactly one newly empty `test\evidence\<run-id>` directory read-write at different Sandbox paths.
+- A selected `.wsb` must map `test\input` read-only and exactly one newly created empty `test\evidence\<run-id>\sandbox-output` directory read-write at different Sandbox paths.
+- The run container and `control` directory must remain unmapped and host-controlled for the full run; host records are never placed in `sandbox-output` before launch.
 - Online networking is an opt-in scenario attribute; absence of the attribute means offline.
 - Clipboard, printer, audio input, video input, and vGPU are disabled in both profiles unless a later written, scenario-specific exception documents why the test cannot run without one. No such exception is part of this design.
 - Evidence must identify the scenario, run ID, selected profile, input-manifest hash, Sandbox configuration hash, timestamps, process outcomes, and completeness state without recording credentials or personal configuration.
@@ -55,14 +61,14 @@ The host-side launcher creates `test\input` only through controlled staging, cre
 
 ### Design Decision
 
-Adopt **Alternative B: a dedicated `test\input` read-only directory plus one separately mapped per-run evidence directory**. It supplies a clear, practical Windows Sandbox boundary with ordinary mapped-folder behavior, avoids overlapping host mappings, and keeps evidence durable during execution without the export fragility of Alternative C.
+Adopt **Alternative B: a dedicated `test\input` read-only directory plus one separately mapped per-run Sandbox-output directory**. It supplies a clear, practical Windows Sandbox boundary with ordinary mapped-folder behavior, avoids overlapping host mappings, preserves host-controlled provenance outside the writable mapping, and keeps output durable during execution without the export fragility of Alternative C.
 
 ### Alternatives
 
 | Alternative | Boundary strength | Automation reliability | Operator complexity | Evidence durability | Migration cost | Decision |
 | --- | --- | --- | --- | --- | --- | --- |
 | A. Map `test` read-only and `test\evidence` read-write at distinct Sandbox paths | Moderate in intent, but dependent on ambiguous behavior when a child host path is mapped separately from its read-only parent | Moderate; overlapping/nested host mappings can be surprising and are difficult to prove portable | Low | High while the Sandbox is running | Low | Reject |
-| B. Create `test\input` read-only and map only `test\evidence\<run-id>` read-write | Strong practical separation: no writable mapped parent contains inputs | High; two non-overlapping mappings use clear access rules | Moderate; requires controlled input staging | High while the Sandbox is running and after teardown | Moderate | Recommend |
+| B. Create `test\input` read-only and map only `test\evidence\<run-id>\sandbox-output` read-write | Strong practical separation: no writable mapped parent contains inputs or host control records | High; two non-overlapping mappings use clear access rules | Moderate; requires controlled input staging | High while the Sandbox is running and after teardown | Moderate | Recommend |
 | C. No host-writable mapping; controlled export after Sandbox exit | Strongest execution isolation | Lower; export can fail on timeout, crash, missing files, or teardown before collection | High; requires collection channel and recovery protocol | Conditional; evidence remains ephemeral until export succeeds | High | Reject for the current harness |
 
 Alternative A is deliberately not selected even though its Sandbox paths would differ. The host paths overlap (`test` contains `test\evidence`), so it leaves the policy dependent on nested-mapping semantics rather than an unambiguous filesystem boundary. Alternative C is appropriate only if a later threat model requires no host write during execution and funds a tested export/retry channel; it must not be substituted silently.
@@ -82,25 +88,25 @@ The host-side launcher selects the online profile only when the scenario descrip
 
 Before launch, the host-side launcher performs these fail-closed steps:
 
-1. Refuse a missing, malformed, duplicate, or non-empty target run directory; generate another run ID rather than deleting or reusing evidence.
-2. Stage a complete selected input set under `test\input` using an atomic replace into a fresh staging directory. The input set excludes `evidence` and excludes unneeded test-root files.
-3. Generate an input manifest that lists every staged file by normalized relative path, byte length, SHA-256, scenario identifier, scenario network mode, and manifest SHA-256. Refuse symlinks, reparse points, path traversal, duplicate normalized names, unexpected files, or hashes that do not match the selected artifact contract.
-4. Generate the selected `.wsb` only after validating that its host mappings are non-overlapping siblings: `test\input` and the exact `test\evidence\<run-id>`. Refuse a source path equal to, parent of, or child of the other mapping.
-5. Write an immutable host launch record into the new run directory before launch, containing run ID, profile, scenario ID, manifest hash, configuration hash, host launcher version, and UTC start time. Its creation is the only host write before the Sandbox starts.
+1. Refuse a malformed, duplicate, or pre-existing target run container; generate another run ID rather than deleting or reusing evidence. Create `test\evidence\<run-id>\control` and `test\evidence\<run-id>\sandbox-output`; verify that `sandbox-output` is empty before launch while allowing only host records in `control`.
+2. Stage a complete selected input set under `test\input` from the tracked `scripts\windows-sandbox\` source revision using an atomic replace into a fresh staging directory. The input set excludes `evidence` and excludes unneeded test-root files.
+3. Generate a canonical input manifest in `control` that lists every staged file by normalized relative path, byte length, SHA-256, scenario identifier, scenario network mode, source revision, and manifest SHA-256; stage an identical read-only copy with the inputs. Refuse symlinks, reparse points, path traversal, duplicate normalized names, unexpected files, or hashes that do not match the selected artifact contract.
+4. Generate the selected `.wsb` in `control` from the tracked template revision only after validating that its host mappings are non-overlapping: `test\input` and the exact `test\evidence\<run-id>\sandbox-output`. Refuse a source path equal to, parent of, or child of the other mapping, or any mapping of the run container or `control` directory.
+5. Write the host-controlled launch record in `control` before launch, containing run ID, profile, scenario ID, canonical manifest hash, generated configuration hash, source revision, host launcher version, and UTC start time. The run container may now contain those control records, but `sandbox-output` remains empty until the Sandbox writes it.
 
 At Sandbox startup, the runner re-hashes every manifest entry from `C:\AgentManagerHarness\Input`, rejects extra or missing staged files, verifies the declared scenario and profile, and writes a `started.json` record to `C:\AgentManagerHarness\Evidence`. It extracts artifacts only into `%TEMP%\AgentManagerSandbox\<run-id>`, never into either mapped input or evidence path. A failed preflight emits a minimal failure record if the evidence mapping is usable, then exits nonzero; it must never continue with unvalidated input.
 
 ### Evidence Isolation, Completeness, And Provenance
 
-The evidence mapping is `C:\AgentManagerHarness\Evidence` to exactly `test\evidence\<run-id>`, not the evidence root. The runner treats it as append-only for a run: it uses create-new semantics for named evidence files, refuses an existing `started.json`, `results.tsv`, transcript, screenshot, log, or final record, and cannot overwrite evidence from another run because that directory is not mapped.
+The evidence mapping is `C:\AgentManagerHarness\Evidence` to exactly `test\evidence\<run-id>\sandbox-output`, not the evidence root, run container, or control directory. The runner treats it as append-only for a run: it uses create-new semantics for named evidence files, refuses an existing `started.json`, `results.tsv`, transcript, screenshot, log, or final record, and cannot overwrite host control records or output from another run because neither is mapped.
 
 Each run must contain a provenance record with the run ID, scenario ID, online/offline profile, Windows build, runner version/hash, input-manifest hash, configuration hash, UTC start/end times, and process exit results. `results.tsv`, transcript, MSI logs when applicable, declared screenshots, and a structured result record form the evidence set. The runner writes a `complete.json` marker last, after verifying that all scenario-required files exist, are non-empty where applicable, and have fresh hashes recorded in that marker. An absent, malformed, mismatched, or non-final `complete.json` means incomplete evidence and blocks result acceptance.
 
-The host-side collector accepts evidence only from the new run directory named in the launch record, requires matching run ID/profile/scenario/manifest/configuration hashes across records, and rejects timestamps outside the launch interval with a small documented clock-skew allowance. It does not scan `test\evidence` for a convenient prior result. A timeout, Sandbox crash, transcript failure, missing final marker, or cleanup error is a failed or blocked run with preserved partial evidence; it cannot reuse stale evidence.
+The host-side collector reads Sandbox evidence only from the `sandbox-output` child named by the unmapped `control\launch.json`, then compares its run ID, profile, scenario, manifest hash, configuration hash, and source revision against the canonical control records. It rejects timestamps outside the launch interval with a small documented clock-skew allowance and does not scan `test\evidence` for a convenient prior result. A timeout, Sandbox crash, transcript failure, missing final marker, mismatch with control records, or cleanup error is a failed or blocked run with preserved partial output; it cannot reuse stale evidence.
 
 ### Process, Timeout, And Cleanup Behavior
 
-The runner starts only the scenario-declared process tree, captures child process IDs and exit status, and applies scenario-declared bounded timeouts. On timeout or failure it records the condition, stops only processes it started, waits for them to exit, and records unsuccessful cleanup rather than broad process-name termination. Sandbox-local temporary directories are removed in `finally` after evidence finalization attempts; mapped evidence is never deleted by the runner or launcher. The host-side launcher imposes a launch-to-completion deadline, records a timeout outcome if the Sandbox does not finish, and preserves the run directory for review.
+The runner starts only the scenario-declared process tree, captures child process IDs and exit status, and applies scenario-declared bounded timeouts. On timeout or failure it records the condition in `sandbox-output`, stops only processes it started, waits for them to exit, and records unsuccessful cleanup rather than broad process-name termination. Sandbox-local temporary directories are removed in `finally` after evidence finalization attempts; `sandbox-output` is never deleted by the runner or launcher, and the control directory remains host-owned. The host-side launcher imposes a launch-to-completion deadline, records a timeout outcome in `control` if the Sandbox does not finish, and preserves the run container for review.
 
 ### Scenario Routing And Platform Boundary
 
@@ -110,7 +116,7 @@ The 18 macOS cases are outside Windows Sandbox execution. The 9 Intel and 9 Appl
 
 ### Rollback
 
-Rollback is a configuration/harness rollback, not a product rollback. Before migration, retain the current harness files in Git history and introduce the new staged-input harness behind its own explicit launcher entrypoint. If preflight, mapping validation, or evidence finalization defects prevent reliable testing, stop launches, preserve existing per-run evidence, and revert the focused harness/config/input-organization commit set. Do not restore the old writable test-root mapping as an emergency fallback; use the previously validated harness revision only in an isolated checkout until the defect is corrected. Rollback verification is successful only when the selected revision again rejects overlapping mappings, refuses stale run directories, and produces a complete offline evidence record using immutable inputs.
+Rollback is a configuration/harness rollback, not a product rollback. Future implementation tracks the templates, launcher, runner, schemas, and staging contract in `scripts\windows-sandbox\`; each launch records that Git commit and content hashes in the unmapped control directory, then stages that exact revision into external `test\input`. If preflight, mapping validation, or evidence finalization defects prevent reliable testing, stop launches, preserve run containers, and select a previously validated tracked `scripts\windows-sandbox\` revision in an isolated checkout for a new staged run. Do not restore the current unsafe external writable-test-root harness as an emergency fallback. Rollback verification is successful only when the selected tracked revision again rejects overlapping mappings, keeps control records unmapped, refuses stale output directories, and produces a complete offline evidence record using immutable inputs.
 
 ## Risks
 
@@ -123,12 +129,12 @@ Rollback is a configuration/harness rollback, not a product rollback. Before mig
 
 ## Acceptance Criteria
 
-- The implemented `.wsb` profiles map only `test\input` read-only and one non-overlapping `test\evidence\<run-id>` directory read-write at the conceptual paths defined in this document.
-- Neither profile maps the test root, repository, evidence root, another run directory, or an input parent writable.
+- The implemented `.wsb` profiles map only `test\input` read-only and one non-overlapping, newly empty `test\evidence\<run-id>\sandbox-output` directory read-write at the conceptual paths defined in this document.
+- Neither profile maps the test root, repository, evidence root, run container, control directory, another run output directory, or an input parent writable.
 - Online networking is enabled only for a descriptor explicitly named online; all other scenarios launch offline, and profile mismatch fails before Sandbox launch.
 - Clipboard, printer, audio input, video input, and vGPU are disabled in both profiles.
-- Launch preflight verifies mapping non-overlap, input-manifest completeness and hashes, run-directory emptiness, scenario identity, and profile identity; any failure prevents launch.
-- Every accepted result has matching launch, start, provenance, and final completion records tied to one run ID and input-manifest hash; stale or incomplete evidence is rejected.
+- Launch preflight verifies mapping non-overlap, input-manifest completeness and hashes, source revision, run-container uniqueness, empty `sandbox-output`, scenario identity, and profile identity; any failure prevents launch.
+- Every accepted result has matching host-controlled launch/configuration/manifest records in `control` and Sandbox start, provenance, and final completion records in `sandbox-output`, tied to one run ID and input-manifest hash; stale, incomplete, or mismatched evidence is rejected.
 - Timeout, process failure, cleanup failure, and evidence-write failure retain partial evidence and result in failure or blocked status, never pass.
 - The Windows 10-case subset has an explicit online/offline route, while all 18 macOS cases retain their platform-specific blocked/static status until real macOS evidence exists.
 - The implementation changes harness/config/input organization only and does not alter Agent Manager product behavior.
@@ -138,22 +144,23 @@ Rollback is a configuration/harness rollback, not a product rollback. Before mig
 
 The following is future implementation work and is not authorization to modify the harness now.
 
-1. Inventory the runner's required files, create controlled `test\input` staging, and define versioned scenario descriptors and input manifests.
-2. Add host-side preflight and launch generation that creates a unique evidence run directory, validates non-overlapping mappings, and chooses the online or offline profile.
-3. Replace the broad writable mapping with the two conceptual mappings and apply the shared device-redirection policy.
-4. Update the runner to validate manifests, use sandbox-local temporary work, write create-new provenance/evidence records, and finalize `complete.json` last.
-5. Encode the 10 Windows scenarios with explicit network modes and link the 18 macOS cases to their blocked/static evidence records without treating them as executed interactions.
-6. Add automated tests for mapping rejection, manifest tampering, profile mismatch, stale evidence, evidence collisions, timeout cleanup, completion-marker failure, and rollback behavior.
-7. Perform disposable Windows validation only after implementation approval; record each observed result and preserve incomplete evidence when a scenario is blocked or fails.
+1. Add the future tracked `scripts\windows-sandbox\` source of truth for templates, launcher, runner, schemas, and staging documentation; version the staging contract without treating external `test` files as source-controlled.
+2. Inventory the runner's required files, create controlled `test\input` staging from that tracked source revision, and define versioned scenario descriptors and input manifests.
+3. Add host-side preflight and launch generation that creates a unique run container with unmapped `control` and empty `sandbox-output` children, validates non-overlapping mappings, and chooses the online or offline profile.
+4. Replace the broad writable mapping with read-only inputs and only the `sandbox-output` child writable, then apply the shared device-redirection policy.
+5. Update the runner to validate staged manifests, use sandbox-local temporary work, write create-new provenance/evidence records only to `sandbox-output`, and finalize `complete.json` last.
+6. Encode the 10 Windows scenarios with explicit network modes and link the 18 macOS cases to their blocked/static evidence records without treating them as executed interactions.
+7. Add automated tests for mapping rejection, control/output isolation, manifest tampering, profile mismatch, stale output, evidence collisions, timeout cleanup, completion-marker failure, and source-controlled rollback behavior.
+8. Perform disposable Windows validation only after implementation approval; record each observed result and preserve incomplete evidence when a scenario is blocked or fails.
 
 ## Verification
 
 Future validation must be performed after implementation approval and must not be inferred from this design document.
 
-1. Run static configuration tests that parse both profiles and assert the exact two mappings, distinct Sandbox paths, non-overlapping host paths, input read-only flag, per-run evidence write flag, disabled redirections, disabled vGPU, and profile-specific network setting.
-2. Run host-side preflight tests for missing input, modified hash, manifest extra file, reparse point, profile mismatch, duplicate run ID, non-empty evidence directory, nested mapping, and launcher timeout.
-3. Run runner tests using harmless fixtures to prove input re-hashing, evidence create-new behavior, manifest/provenance propagation, required-file completeness checks, final-marker ordering, and cleanup recording.
-4. In a disposable Windows Sandbox, execute every Windows scenario in its declared profile and verify that only the selected run directory changes on the host. Confirm that an offline scenario has no network route and an online download-failure scenario records the classified failure without falling back to stale evidence.
-5. Inspect each accepted evidence directory for matching records, fresh hashes, a final `complete.json`, declared artifacts, and no credentials. Mark any missing or partial case failed or blocked.
-6. Verify rollback in an isolated checkout by selecting the prior hardened harness revision, confirming the old broad writable mapping is not reintroduced, and producing a complete offline evidence run.
+1. Run static configuration tests that parse both profiles and assert the exact two mappings, distinct Sandbox paths, non-overlapping host paths, unmapped run-container/control paths, input read-only flag, empty per-run `sandbox-output` write flag, disabled redirections, disabled vGPU, and profile-specific network setting.
+2. Run host-side preflight tests for missing input, modified hash, manifest extra file, reparse point, profile mismatch, duplicate run container, non-empty `sandbox-output`, nested mapping, a mapped control directory, and launcher timeout.
+3. Run runner tests using harmless fixtures to prove input re-hashing, control/output separation, evidence create-new behavior, manifest/provenance propagation, required-file completeness checks, final-marker ordering, and cleanup recording.
+4. In a disposable Windows Sandbox, execute every Windows scenario in its declared profile and verify that only the selected `sandbox-output` child changes on the host. Confirm that an offline scenario has no network route and an online download-failure scenario records the classified failure without falling back to stale evidence.
+5. Inspect each accepted run container for unmapped control records matching the source revision and for `sandbox-output` records with matching hashes, a final `complete.json`, declared artifacts, and no credentials. Mark any missing, partial, or mismatched case failed or blocked.
+6. Verify rollback in an isolated checkout by selecting a prior validated tracked `scripts\windows-sandbox\` revision, confirming the old broad writable mapping is not reintroduced, control remains unmapped, and producing a complete offline evidence run.
 7. Run `git diff --check`, inspect the changed-file list, and retain a verification report that separately lists Windows interaction evidence and macOS blocked/static evidence.
