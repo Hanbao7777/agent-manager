@@ -2,6 +2,12 @@ name: Windows Internal Build
 
 on:
   workflow_dispatch:
+    inputs:
+      build_artifacts:
+        description: Build and upload the MSI and portable ZIP after verification
+        required: false
+        type: boolean
+        default: false
   push:
     branches: [main]
 
@@ -15,6 +21,7 @@ concurrency:
 jobs:
   build:
     runs-on: windows-2022
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -72,16 +79,21 @@ jobs:
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 
       - name: Rust check
+        timeout-minutes: 12
         run: cargo check --manifest-path src-tauri/Cargo.toml
 
       - name: Rust tests
+        timeout-minutes: 12
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
       - name: Build Tauri MSI
+        if: github.event_name != 'workflow_dispatch' || inputs.build_artifacts
+        timeout-minutes: 15
         shell: pwsh
         run: pnpm tauri build --bundles msi
 
       - name: Assemble internal artifacts
+        if: github.event_name != 'workflow_dispatch' || inputs.build_artifacts
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -113,6 +125,7 @@ jobs:
           Get-ChildItem $artifactDir | Format-Table Name,Length
 
       - name: Verify internal artifacts
+        if: github.event_name != 'workflow_dispatch' || inputs.build_artifacts
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -148,6 +161,7 @@ jobs:
           }
 
       - name: Upload internal build artifact
+        if: github.event_name != 'workflow_dispatch' || inputs.build_artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Agent-Manager-0.1.0-Windows-internal
