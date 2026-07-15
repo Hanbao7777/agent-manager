@@ -2,6 +2,12 @@ name: macOS Universal Internal Build
 
 on:
   workflow_dispatch:
+    inputs:
+      build_artifacts:
+        description: Build and upload the Universal DMG after verification
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -13,7 +19,7 @@ concurrency:
 jobs:
   build:
     runs-on: macos-14
-    timeout-minutes: 15
+    timeout-minutes: ${{ inputs.build_artifacts && 35 || 15 }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -69,15 +75,20 @@ jobs:
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 
       - name: Rust check
+        timeout-minutes: 12
         run: cargo check --manifest-path src-tauri/Cargo.toml
 
       - name: Rust tests
+        timeout-minutes: 12
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
       - name: Build Tauri Universal DMG
+        if: inputs.build_artifacts
+        timeout-minutes: 20
         run: pnpm tauri build --target universal-apple-darwin --bundles dmg
 
       - name: Verify Universal app architecture
+        if: inputs.build_artifacts
         shell: bash
         run: |
           set -euo pipefail
@@ -125,6 +136,7 @@ jobs:
           PY
 
       - name: Assemble internal artifact
+        if: inputs.build_artifacts
         shell: bash
         run: |
           set -euo pipefail
@@ -142,6 +154,7 @@ jobs:
           printf '%s  %s\n' "$hash" "$name" > "$artifact_dir/SHA256SUMS.txt"
 
       - name: Verify internal artifact
+        if: inputs.build_artifacts
         shell: bash
         run: |
           set -euo pipefail
@@ -167,6 +180,7 @@ jobs:
           test "${BASH_REMATCH[1]}" = "$fresh"
 
       - name: Upload internal build artifact
+        if: inputs.build_artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Agent-Manager-0.1.0-macOS-Universal-internal
