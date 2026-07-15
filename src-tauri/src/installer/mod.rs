@@ -1,17 +1,24 @@
+mod atomic_file;
 pub mod failure;
 mod model;
+mod node_pair_resolution;
 pub mod orchestrator;
 pub mod platform;
 mod policy;
 pub mod probe;
 pub mod repair;
+mod task_ids;
+mod task_status;
 pub mod tools;
 pub mod verifier;
+mod version_output;
 
 use tauri::Emitter;
 
+pub(crate) use atomic_file::{replace_file, unique_temporary_path};
 pub use failure::{classify_process_failure, redact_diagnostic};
 pub use model::*;
+pub(crate) use node_pair_resolution::{resolve_pair_with_refresh, PairSource};
 pub use orchestrator::{CommandRuntime, InstallTaskStore, OrchestratorRuntime};
 pub use platform::{
     cleanup_task_temp, download_and_verify_node, fetch_node_index, install_node,
@@ -21,11 +28,14 @@ pub use platform::{
 pub use policy::{node_policy, NodePolicy};
 pub use probe::{CommandProbe, ProbeConfig, ProbeRunner, SystemProbe};
 pub use repair::build_repair_plan;
+pub(crate) use task_ids::next_sequence_from_task_ids;
+pub(crate) use task_status::{aggregate_tool_outcomes, AggregatedTaskStatus, ToolOutcome};
 pub use tools::{tool_strategy, SharedDependency, ToolInstallMethod, ToolInstallStrategy, ToolKey};
 pub use verifier::{
     verify_tool, verify_tool_detailed, CleanEnvironment, DependencyCandidates, ExecutableBaseline,
     ResolvedNodeNpmPair, ToolCommandOutput, ToolRunner, ToolVerification,
 };
+pub(crate) use version_output::parse_command_version_output;
 
 #[tauri::command]
 pub fn prepare_tool_install(

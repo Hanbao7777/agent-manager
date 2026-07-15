@@ -1,4 +1,5 @@
 use std::{
+    error::Error as _,
     fs,
     path::{Path, PathBuf},
 };
@@ -11,7 +12,12 @@ use crate::installer::{
 };
 
 pub mod macos;
+mod node_assets;
 pub mod windows;
+
+pub use node_assets::{
+    node_asset_descriptor, NodeAssetDescriptor, NodeInstallerArchitecture, NodeInstallerPlatform,
+};
 
 const NODE_INDEX_URL: &str = "https://nodejs.org/dist/index.json";
 
@@ -55,7 +61,7 @@ impl Drop for TaskTempGuard {
 
 pub trait PlatformAdapter {
     fn platform(&self) -> Platform;
-    fn asset_name(&self, version: &str, architecture: Architecture) -> Option<String>;
+    fn node_asset(&self, version: &str, architecture: Architecture) -> Option<NodeAssetDescriptor>;
     fn verify_signature_command(&self, package: &Path) -> CommandSpec;
     fn install_command(&self, package: &Path) -> CommandSpec;
     fn refresh_clean_environment(&self) -> Result<CleanEnvironment, InstallFailure>;
@@ -97,7 +103,7 @@ pub fn resolve_node_release(
         if !policy.accepts_major(major) {
             continue;
         }
-        let Some(asset_name) = adapter.asset_name(version, architecture.clone()) else {
+        let Some(asset) = adapter.node_asset(version, architecture.clone()) else {
             continue;
         };
         if !row
@@ -106,7 +112,7 @@ pub fn resolve_node_release(
             .is_some_and(|files| {
                 files
                     .iter()
-                    .any(|file| file.as_str() == Some(asset_name.as_str()))
+                    .any(|file| file.as_str() == Some(asset.index_file))
             })
         {
             continue;
@@ -115,7 +121,7 @@ pub fn resolve_node_release(
             .as_ref()
             .is_none_or(|(_, current, _)| version_key(version) > version_key(current))
         {
-            selected = Some((major, version.to_string(), asset_name));
+            selected = Some((major, version.to_string(), asset.package_name));
         }
     }
     let (major, version, asset_name) = selected.ok_or_else(|| {
@@ -151,12 +157,12 @@ pub async fn fetch_node_index() -> Result<String, InstallFailure> {
         .get(NODE_INDEX_URL)
         .send()
         .await
-        .map_err(|error| failure(InstallFailureCode::NetworkTimeout, &error.to_string()))?
+        .map_err(network_failure)?
         .error_for_status()
-        .map_err(|error| failure(InstallFailureCode::NetworkTimeout, &error.to_string()))?
+        .map_err(network_failure)?
         .text()
         .await
-        .map_err(|error| failure(InstallFailureCode::NetworkTimeout, &error.to_string()))
+        .map_err(network_failure)
 }
 
 pub async fn download_and_verify_node(
@@ -170,7 +176,7 @@ pub async fn download_and_verify_node(
         .get(&release.checksums_url)
         .send()
         .await
-        .map_err(|error| failure(InstallFailureCode::NetworkTimeout, &error.to_string()))?
+        .map_err(network_failure)?
         .error_for_status()
         .map_err(|error| {
             failure(
@@ -180,7 +186,7 @@ pub async fn download_and_verify_node(
         })?
         .text()
         .await
-        .map_err(|error| failure(InstallFailureCode::NetworkTimeout, &error.to_string()))?;
+        .map_err(network_failure)?;
     let expected = checksum_for_asset(&checksum_text, &release.asset_name).ok_or_else(|| {
         failure(
             InstallFailureCode::DownloadIntegrityFailure,
@@ -191,7 +197,7 @@ pub async fn download_and_verify_node(
         .get(&release.download_url)
         .send()
         .await
-        .map_err(|error| failure(InstallFailureCode::NetworkTimeout, &error.to_string()))?
+        .map_err(network_failure)?
         .error_for_status()
         .map_err(|error| {
             failure(
@@ -201,7 +207,7 @@ pub async fn download_and_verify_node(
         })?
         .bytes()
         .await
-        .map_err(|error| failure(InstallFailureCode::NetworkTimeout, &error.to_string()))?;
+        .map_err(network_failure)?;
     if let Err(error) = verify_sha256(&bytes, &expected) {
         let _ = fs::remove_dir_all(task_temp);
         return Err(error);
@@ -314,12 +320,44 @@ fn run_checked(command: CommandSpec, code: InstallFailureCode) -> Result<(), Ins
             &String::from_utf8_lossy(&output.stdout),
             &String::from_utf8_lossy(&output.stderr),
         );
-        if classified.code == InstallFailureCode::PrivilegeDeclined
-            || classified.code == InstallFailureCode::SignatureVerificationFailure
+        if classified.code == InstallFailureCode::InstallerFailure
+            && code != InstallFailureCode::InstallerFailure
         {
-            Err(classified)
-        } else {
             Err(failure(code, "platform installer command failed"))
+        } else {
+            Err(classified)
+        }
+    }
+}
+
+fn network_failure(error: reqwest::Error) -> InstallFailure {
+    let mut details = vec![error.to_string()];
+    let mut source = error.source();
+    while let Some(cause) = source {
+        details.push(cause.to_string());
+        source = cause.source();
+    }
+    let detail = details.join(": ");
+    let classified =
+        crate::installer::classify_process_failure(InstallStage::Repairing, None, "", &detail);
+    if matches!(
+        classified.code,
+        InstallFailureCode::DnsFailure
+            | InstallFailureCode::NetworkTimeout
+            | InstallFailureCode::ProxyUnreachable
+            | InstallFailureCode::TlsFailure
+    ) {
+        classified
+    } else {
+        InstallFailure {
+            code: InstallFailureCode::InstallerFailure,
+            stage: InstallStage::Repairing,
+            exit_code: None,
+            retryable: true,
+            requires_user_action: false,
+            message_key: "installer.failure.repairing".into(),
+            recommended_action: RecommendedAction::CheckNetwork,
+            detail: Some(crate::installer::redact_diagnostic(&detail)),
         }
     }
 }
@@ -345,18 +383,19 @@ mod tests {
         fn platform(&self) -> Platform {
             Platform::Windows
         }
-        fn asset_name(&self, version: &str, architecture: Architecture) -> Option<String> {
-            Some(
-                format!(
-                    "node-{version}-{} .msi",
-                    if architecture == Architecture::X64 {
-                        "x64"
-                    } else {
-                        "arm64"
-                    }
-                )
-                .replace(" ", ""),
-            )
+        fn node_asset(
+            &self,
+            version: &str,
+            architecture: Architecture,
+        ) -> Option<NodeAssetDescriptor> {
+            Some(node_asset_descriptor(
+                NodeInstallerPlatform::Windows,
+                match architecture {
+                    Architecture::X64 => NodeInstallerArchitecture::X64,
+                    Architecture::Arm64 => NodeInstallerArchitecture::Arm64,
+                },
+                version,
+            ))
         }
         fn verify_signature_command(&self, _: &Path) -> CommandSpec {
             CommandSpec {
@@ -376,7 +415,7 @@ mod tests {
     }
     #[test]
     fn selects_newest_allowed_lts_exact_asset() {
-        let index = r#"[{"version":"v24.1.0","lts":"Krypton","files":["node-v24.1.0-x64.msi"]},{"version":"v22.9.0","lts":"Jod","files":["node-v22.9.0-x64.msi"]}]"#;
+        let index = r#"[{"version":"v24.1.0","lts":"Krypton","files":["win-x64-msi"]},{"version":"v22.9.0","lts":"Jod","files":["win-x64-msi"]}]"#;
         assert_eq!(
             resolve_node_release(
                 index,
@@ -391,8 +430,32 @@ mod tests {
     }
 
     #[test]
+    fn accepts_official_node_index_platform_identifiers() {
+        let index =
+            r#"[{"version":"v24.18.0","lts":"Krypton","files":["osx-x64-pkg","win-x64-msi"]}]"#;
+
+        let windows = resolve_node_release(
+            index,
+            &crate::installer::node_policy(),
+            &windows::WindowsAdapter,
+            Architecture::X64,
+        )
+        .unwrap();
+        assert_eq!(windows.asset_name, "node-v24.18.0-x64.msi");
+
+        let macos = resolve_node_release(
+            index,
+            &crate::installer::node_policy(),
+            &macos::MacosAdapter,
+            Architecture::X64,
+        )
+        .unwrap();
+        assert_eq!(macos.asset_name, "node-v24.18.0.pkg");
+    }
+
+    #[test]
     fn skips_newer_lts_without_the_exact_platform_asset() {
-        let index = r#"[{"version":"v24.2.0","lts":"Iron","files":["node-v24.2.0-arm64.msi"]},{"version":"v24.1.0","lts":"Iron","files":["node-v24.1.0-x64.msi"]}]"#;
+        let index = r#"[{"version":"v24.2.0","lts":"Iron","files":["win-arm64-msi"]},{"version":"v24.1.0","lts":"Iron","files":["win-x64-msi"]}]"#;
 
         let release = resolve_node_release(
             index,
@@ -408,7 +471,7 @@ mod tests {
 
     #[test]
     fn rejects_non_string_lts_rows_even_when_the_asset_exists() {
-        let index = r#"[{"version":"v24.2.0","lts":true,"files":["node-v24.2.0-x64.msi"]},{"version":"v24.1.0","lts":false,"files":["node-v24.1.0-x64.msi"]}]"#;
+        let index = r#"[{"version":"v24.2.0","lts":true,"files":["win-x64-msi"]},{"version":"v24.1.0","lts":false,"files":["win-x64-msi"]}]"#;
 
         assert_eq!(
             resolve_node_release(

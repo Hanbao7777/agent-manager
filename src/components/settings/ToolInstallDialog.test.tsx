@@ -95,7 +95,7 @@ describe("ToolInstallDialog", () => {
     expect(onConfirm).toHaveBeenCalledWith(["install-node"]);
   });
 
-  it("hides on Escape without cancelling, while the explicit button cancels", () => {
+  it("prevents Escape dismissal while confirmation is pending", () => {
     const onClose = vi.fn();
     const onCancel = vi.fn();
     render(
@@ -111,10 +111,61 @@ describe("ToolInstallDialog", () => {
     );
 
     fireEvent.keyDown(document, { key: "Escape" });
-    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).not.toHaveBeenCalled();
     expect(onCancel).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "common.cancel" }));
     expect(onCancel).toHaveBeenCalledOnce();
+  });
+
+  it("submits confirmation only once while start is in flight", () => {
+    const onConfirm = vi.fn(() => new Promise<void>(() => undefined));
+    render(
+      <ToolInstallDialog
+        open
+        preparation={preparation}
+        task={null}
+        toolName={(tool) => tool}
+        onConfirm={onConfirm}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("checkbox"));
+    const button = screen.getByRole("button", { name: "Continue" });
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    expect(onConfirm).toHaveBeenCalledOnce();
+    expect(button).toBeDisabled();
+  });
+
+  it("does not offer cancellation during the non-cancellable repair stage", () => {
+    render(
+      <ToolInstallDialog
+        open
+        preparation={null}
+        task={{
+          task_id: preparation.task_id,
+          request: {
+            task_id: preparation.task_id,
+            tools: ["codex"],
+            action: "install",
+          },
+          stage: "repairing",
+          plan: preparation.plan,
+          result: null,
+          cancellation_requested: false,
+          interrupted: false,
+        }}
+        toolName={(tool) => tool}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "settings.installer.cancel" }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows successful and failed tools in one batch result", () => {

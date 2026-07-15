@@ -7,18 +7,18 @@ use std::{
 };
 
 use super::{
-    build_repair_plan, node_policy, CleanEnvironment, ConfirmedInstallRequest, EnvironmentSnapshot,
+    aggregate_tool_outcomes, build_repair_plan, next_sequence_from_task_ids, node_policy,
+    parse_command_version_output, replace_file, resolve_pair_with_refresh, unique_temporary_path,
+    AggregatedTaskStatus, CleanEnvironment, ConfirmedInstallRequest, EnvironmentSnapshot,
     InstallFailure, InstallFailureCode, InstallPreparation, InstallRequest, InstallStage,
-    InstallTaskResult, InstallTaskSnapshot, InstallTaskStatus, RecommendedAction, RepairPlan,
-    ResolvedNodeNpmPair, ToolId, ToolInstallResult, ToolInstallStatus,
+    InstallTaskResult, InstallTaskSnapshot, InstallTaskStatus, PairSource, RecommendedAction,
+    RepairPlan, ResolvedNodeNpmPair, ToolId, ToolInstallResult, ToolInstallStatus, ToolOutcome,
 };
 
 use std::{
     path::{Path, PathBuf},
     sync::atomic::AtomicBool,
 };
-
-static NEXT_TASK_ID: AtomicU64 = AtomicU64::new(1);
 
 pub trait OrchestratorRuntime: Send + Sync {
     fn snapshot(&self) -> Result<EnvironmentSnapshot, InstallFailure>;
@@ -33,6 +33,8 @@ pub struct InstallTaskStore {
     claims: Arc<RwLock<HashSet<String>>>,
     startup_recovery_events: Arc<RwLock<Vec<super::InstallTaskEvent>>>,
     persistence_path: Option<Arc<PathBuf>>,
+    next_task_id: Arc<AtomicU64>,
+    persistence_sequence: Arc<AtomicU64>,
 }
 
 impl Default for InstallTaskStore {
@@ -43,6 +45,8 @@ impl Default for InstallTaskStore {
             claims: Arc::default(),
             startup_recovery_events: Arc::default(),
             persistence_path: None,
+            next_task_id: Arc::new(AtomicU64::new(1)),
+            persistence_sequence: Arc::new(AtomicU64::new(1)),
         }
     }
 }
@@ -51,7 +55,7 @@ impl InstallTaskStore {
     pub fn with_persistence(config_dir: PathBuf) -> Self {
         let path = config_dir.join("install-tasks.json");
         let mut startup_recovery_events = Vec::new();
-        let tasks = std::fs::read(&path)
+        let tasks: HashMap<String, InstallTaskSnapshot> = std::fs::read(&path)
             .ok()
             .and_then(|data| serde_json::from_slice::<Vec<InstallTaskSnapshot>>(&data).ok())
             .unwrap_or_default()
@@ -76,12 +80,15 @@ impl InstallTaskStore {
                 (task.task_id.clone(), task)
             })
             .collect();
+        let next_task_id = next_sequence_from_task_ids(tasks.keys().map(String::as_str));
         let store = Self {
             tasks: Arc::new(RwLock::new(tasks)),
             cancellations: Arc::default(),
             claims: Arc::default(),
             startup_recovery_events: Arc::new(RwLock::new(startup_recovery_events)),
             persistence_path: Some(Arc::new(path)),
+            next_task_id: Arc::new(AtomicU64::new(next_task_id)),
+            persistence_sequence: Arc::new(AtomicU64::new(1)),
         };
         store.persist();
         store
@@ -97,9 +104,14 @@ impl InstallTaskStore {
         };
         let Some(parent) = path.parent() else { return };
         if std::fs::create_dir_all(parent).is_ok() {
-            let temp = path.with_extension("json.tmp");
+            let temp = unique_temporary_path(
+                path,
+                self.persistence_sequence.fetch_add(1, Ordering::Relaxed),
+            );
             if std::fs::write(&temp, data).is_ok() {
-                let _ = std::fs::rename(temp, path.as_ref());
+                if replace_file(&temp, path.as_ref()).is_err() {
+                    let _ = std::fs::remove_file(temp);
+                }
             }
         }
     }
@@ -127,14 +139,21 @@ impl InstallTaskStore {
 
     pub fn prepare<R: OrchestratorRuntime>(
         &self,
-        request: InstallRequest,
+        mut request: InstallRequest,
         runtime: &R,
     ) -> Result<InstallPreparation, InstallFailure> {
         let plan = build_repair_plan(&runtime.snapshot()?, &node_policy())?;
-        let task_id = request
-            .task_id
-            .clone()
-            .unwrap_or_else(|| format!("install-{}", NEXT_TASK_ID.fetch_add(1, Ordering::Relaxed)));
+        let task_id = request.task_id.clone().unwrap_or_else(|| {
+            format!(
+                "install-{}",
+                self.next_task_id.fetch_add(1, Ordering::Relaxed)
+            )
+        });
+        // The frontend prepares new tasks without an id, then confirms them
+        // with the generated id returned below. Persist the canonical request
+        // so confirmation compares the same task identity instead of `None`
+        // against `Some(generated_id)`.
+        request.task_id = Some(task_id.clone());
         let requires_confirmation = plan
             .actions
             .iter()
@@ -344,11 +363,12 @@ impl InstallTaskStore {
                     "task cancellation token missing",
                 )
             })?;
+        let mut results = Vec::new();
         if cancelled.load(Ordering::Acquire) {
             if self.has_terminal_cancellation(&task_id) {
                 return Ok(task_id);
             }
-            let task_id = self.finish_cancelled(task_id, task)?;
+            let task_id = self.finish_cancelled(task_id, task, results)?;
             self.emit_terminal(&task_id, &mut emit);
             return Ok(task_id);
         }
@@ -373,7 +393,7 @@ impl InstallTaskStore {
             if self.has_terminal_cancellation(&task_id) {
                 return Ok(task_id);
             }
-            let task_id = self.finish_cancelled(task_id, task)?;
+            let task_id = self.finish_cancelled(task_id, task, results)?;
             self.emit_terminal(&task_id, &mut emit);
             return Ok(task_id);
         }
@@ -389,25 +409,16 @@ impl InstallTaskStore {
                 stage: InstallStage::InstallingTools,
             });
         }
-        let mut results = Vec::new();
         for tool in task.request.tools.iter().copied() {
             if cancelled.load(Ordering::Acquire) {
                 if self.has_terminal_cancellation(&task_id) {
                     return Ok(task_id);
                 }
-                let task_id = self.finish_cancelled(task_id, task)?;
+                let task_id = self.finish_cancelled(task_id, task, results)?;
                 self.emit_terminal(&task_id, &mut emit);
                 return Ok(task_id);
             }
             let result = runtime.install_tool(tool);
-            if cancelled.load(Ordering::Acquire) {
-                if self.has_terminal_cancellation(&task_id) {
-                    return Ok(task_id);
-                }
-                let task_id = self.finish_cancelled(task_id, task)?;
-                self.emit_terminal(&task_id, &mut emit);
-                return Ok(task_id);
-            }
             emit(super::InstallTaskEvent::ToolFinished {
                 task_id: task_id.clone(),
                 result: result.clone(),
@@ -417,7 +428,7 @@ impl InstallTaskStore {
                 if self.has_terminal_cancellation(&task_id) {
                     return Ok(task_id);
                 }
-                let task_id = self.finish_cancelled(task_id, task)?;
+                let task_id = self.finish_cancelled(task_id, task, results)?;
                 self.emit_terminal(&task_id, &mut emit);
                 return Ok(task_id);
             }
@@ -436,18 +447,24 @@ impl InstallTaskStore {
             if self.has_terminal_cancellation(&task_id) {
                 return Ok(task_id);
             }
-            let task_id = self.finish_cancelled(task_id, task)?;
+            let task_id = self.finish_cancelled(task_id, task, results)?;
             self.emit_terminal(&task_id, &mut emit);
             return Ok(task_id);
         }
-        let failed = results
-            .iter()
-            .any(|result| result.status != ToolInstallStatus::Succeeded);
+        let status = aggregate_tool_outcomes(results.iter().map(|result| match result.status {
+            ToolInstallStatus::Succeeded => ToolOutcome::Succeeded,
+            ToolInstallStatus::Failed => ToolOutcome::Failed,
+            ToolInstallStatus::InstalledNotRunnable => ToolOutcome::InstalledNotRunnable,
+            ToolInstallStatus::Skipped => ToolOutcome::Skipped,
+        }));
         task.result = Some(InstallTaskResult {
-            status: if failed {
-                InstallTaskStatus::NeedsUserAction
-            } else {
-                InstallTaskStatus::Succeeded
+            status: match status {
+                AggregatedTaskStatus::Succeeded => InstallTaskStatus::Succeeded,
+                AggregatedTaskStatus::InstalledNotRunnable => {
+                    InstallTaskStatus::InstalledNotRunnable
+                }
+                AggregatedTaskStatus::NeedsUserAction => InstallTaskStatus::NeedsUserAction,
+                AggregatedTaskStatus::Failed => InstallTaskStatus::Failed,
             },
             tools: results,
             failure: None,
@@ -520,12 +537,13 @@ impl InstallTaskStore {
         &self,
         task_id: String,
         mut task: InstallTaskSnapshot,
+        tools: Vec<ToolInstallResult>,
     ) -> Result<String, InstallFailure> {
         task.cancellation_requested = true;
         task.stage = InstallStage::Completed;
         task.result = Some(InstallTaskResult {
             status: InstallTaskStatus::CancelledByUser,
-            tools: Vec::new(),
+            tools,
             failure: None,
         });
         self.tasks
@@ -800,26 +818,24 @@ fn resolve_host_command(name: &str, entries: &[PathBuf]) -> Option<PathBuf> {
 fn resolve_node_npm_pair() -> Result<ResolvedNodeNpmPair, String> {
     let entries: Vec<PathBuf> =
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect();
-    let nodes = entries
-        .iter()
-        .filter_map(|entry| resolve_host_command("node", std::slice::from_ref(entry)))
-        .collect::<Vec<_>>();
-    let npms = entries
-        .iter()
-        .filter_map(|entry| resolve_host_command("npm", std::slice::from_ref(entry)))
-        .collect::<Vec<_>>();
-    if nodes.len() != 1 || npms.len() != 1 {
-        return Err("a single coherent Node.js/npm installation is required".into());
-    }
-    let node = nodes.into_iter().next().unwrap();
-    let npm = npms.into_iter().next().unwrap();
-    if node.parent() != npm.parent() {
-        return Err("resolved Node.js and npm do not share an installation directory".into());
-    }
+    let resolved = resolve_pair_with_refresh(&entries, || {
+        let adapter = host_adapter()
+            .ok_or_else(|| "native installer is limited to Windows and macOS".to_string())?;
+        super::refresh_environment(adapter.as_ref())
+            .map(|environment| environment.path_entries)
+            .map_err(|error| {
+                error
+                    .detail
+                    .unwrap_or_else(|| "failed to refresh the system environment".into())
+            })
+    })?;
     Ok(ResolvedNodeNpmPair {
-        node,
-        npm,
-        source: "PATH",
+        node: resolved.node,
+        npm: resolved.npm,
+        source: match resolved.source {
+            PairSource::ProcessPath => "PATH",
+            PairSource::RefreshedEnvironment => "refreshed-environment",
+        },
     })
 }
 
@@ -856,10 +872,7 @@ fn command_version_in_environment(path: &Path, environment: &CleanEnvironment) -
     if !output.status.success() {
         return None;
     }
-    String::from_utf8_lossy(&output.stdout)
-        .split_whitespace()
-        .find(|part| part.chars().next().is_some_and(|c| c.is_ascii_digit()))
-        .map(str::to_owned)
+    parse_command_version_output(&String::from_utf8_lossy(&output.stdout))
 }
 
 fn command_version(path: &Path) -> Option<String> {
@@ -870,10 +883,7 @@ fn command_version(path: &Path) -> Option<String> {
     if !output.status.success() {
         return None;
     }
-    String::from_utf8_lossy(&output.stdout)
-        .split_whitespace()
-        .find(|part| part.chars().next().is_some_and(|c| c.is_ascii_digit()))
-        .map(str::to_owned)
+    parse_command_version_output(&String::from_utf8_lossy(&output.stdout))
 }
 
 fn failure(code: InstallFailureCode, detail: &str) -> InstallFailure {
@@ -975,6 +985,41 @@ mod tests {
     }
 
     #[test]
+    fn generated_task_id_is_bound_before_confirmation() {
+        let store = InstallTaskStore::default();
+        let prepared = InstallRequest {
+            task_id: None,
+            tools: vec![ToolId::Codex],
+            action: super::super::InstallAction::Install,
+        };
+        let preparation = store.prepare(prepared, &Fake).unwrap();
+        let confirmed = ConfirmedInstallRequest {
+            request: InstallRequest {
+                task_id: Some(preparation.task_id.clone()),
+                tools: vec![ToolId::Codex],
+                action: super::super::InstallAction::Install,
+            },
+            confirmed_action_ids: preparation
+                .plan
+                .actions
+                .iter()
+                .map(|action| action.id.clone())
+                .collect(),
+        };
+
+        assert_eq!(
+            store
+                .get(&preparation.task_id)
+                .unwrap()
+                .request
+                .task_id
+                .as_deref(),
+            Some(preparation.task_id.as_str())
+        );
+        assert_eq!(store.claim_start(&confirmed).unwrap(), preparation.task_id);
+    }
+
+    #[test]
     fn hermes_install_fails_closed_without_a_verified_installer() {
         let result = CommandRuntime.install_tool(ToolId::Hermes);
 
@@ -984,6 +1029,15 @@ mod tests {
             Some("no approved verified Hermes installer available")
         );
     }
+
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    #[test]
+    fn production_snapshot_reports_measured_disk_space() {
+        let snapshot = CommandRuntime.snapshot().unwrap();
+
+        assert!(snapshot.available_disk_bytes < u64::MAX);
+    }
+
     #[test]
     fn confirmed_batch_repairs_once_and_finishes() {
         let store = InstallTaskStore::default();
@@ -1218,6 +1272,14 @@ mod tests {
                     stage: InstallStage::InstallingTools,
                     ..
                 },
+                super::super::InstallTaskEvent::ToolFinished {
+                    result: ToolInstallResult {
+                        tool: ToolId::Codex,
+                        status: ToolInstallStatus::Succeeded,
+                        ..
+                    },
+                    ..
+                },
                 super::super::InstallTaskEvent::StageChanged {
                     stage: InstallStage::Completed,
                     ..
@@ -1225,11 +1287,12 @@ mod tests {
                 super::super::InstallTaskEvent::Finished {
                     result: InstallTaskResult {
                         status: InstallTaskStatus::CancelledByUser,
+                        tools,
                         ..
                     },
                     ..
                 },
-            ]
+            ] if tools.len() == 1 && tools[0].tool == ToolId::Codex
         ));
     }
 

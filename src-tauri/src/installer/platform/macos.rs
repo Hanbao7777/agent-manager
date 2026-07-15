@@ -1,4 +1,7 @@
-use super::{CommandSpec, PlatformAdapter};
+use super::{
+    node_asset_descriptor, CommandSpec, NodeAssetDescriptor, NodeInstallerArchitecture,
+    NodeInstallerPlatform, PlatformAdapter,
+};
 use crate::installer::{Architecture, CleanEnvironment, InstallFailure, Platform};
 use std::path::{Path, PathBuf};
 
@@ -7,13 +10,14 @@ impl PlatformAdapter for MacosAdapter {
     fn platform(&self) -> Platform {
         Platform::Macos
     }
-    fn asset_name(&self, version: &str, architecture: Architecture) -> Option<String> {
-        Some(format!(
-            "node-{version}-{}.pkg",
+    fn node_asset(&self, version: &str, architecture: Architecture) -> Option<NodeAssetDescriptor> {
+        Some(node_asset_descriptor(
+            NodeInstallerPlatform::Macos,
             match architecture {
-                Architecture::X64 => "x64",
-                Architecture::Arm64 => "arm64",
-            }
+                Architecture::X64 => NodeInstallerArchitecture::X64,
+                Architecture::Arm64 => NodeInstallerArchitecture::Arm64,
+            },
+            version,
         ))
     }
     fn verify_signature_command(&self, package: &Path) -> CommandSpec {

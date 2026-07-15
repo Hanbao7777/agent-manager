@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   CheckCircle2,
@@ -30,7 +30,7 @@ interface ToolInstallDialogProps {
   preparation: InstallPreparation | null;
   task: InstallTaskSnapshot | null;
   toolName: (tool: ToolId) => string;
-  onConfirm: (actionIds: string[]) => void;
+  onConfirm: (actionIds: string[]) => void | Promise<void>;
   onCancel: () => void;
   onClose?: () => void;
   onRetry?: () => void;
@@ -83,6 +83,8 @@ export function ToolInstallDialog({
 }: ToolInstallDialogProps) {
   const { t } = useTranslation();
   const [approved, setApproved] = useState<string[]>([]);
+  const [confirming, setConfirming] = useState(false);
+  const confirmationInFlight = useRef(false);
   const actions = preparation?.plan.actions ?? task?.plan.actions ?? [];
   const required = actions.filter(
     (action) => action.requires_confirmation || action.requires_elevation,
@@ -95,9 +97,13 @@ export function ToolInstallDialog({
   const canContinue =
     !preparation?.requires_confirmation ||
     required.every((action) => approved.includes(action.id));
+  const blocksDismissal = Boolean(preparation || isProgress);
+  const canCancelProgress = task?.stage !== "repairing";
 
   useEffect(() => {
     setApproved([]);
+    setConfirming(false);
+    confirmationInFlight.current = false;
   }, [open, preparation?.task_id, task?.task_id]);
 
   const toggle = (id: string) =>
@@ -107,11 +113,23 @@ export function ToolInstallDialog({
         : [...current, id],
     );
 
+  const confirm = async () => {
+    if (confirmationInFlight.current) return;
+    confirmationInFlight.current = true;
+    setConfirming(true);
+    try {
+      await onConfirm(required.map((action) => action.id));
+    } finally {
+      confirmationInFlight.current = false;
+      setConfirming(false);
+    }
+  };
+
   return (
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        if (!next) onClose?.();
+        if (!next && !blocksDismissal) onClose?.();
       }}
     >
       <DialogContent className="max-w-md" zIndex="alert">
@@ -200,9 +218,11 @@ export function ToolInstallDialog({
         )}
         <DialogFooter className="border-t-0 bg-transparent pt-2 sm:justify-end">
           {isProgress ? (
-            <Button variant="outline" onClick={onCancel}>
-              {t("settings.installer.cancel")}
-            </Button>
+            canCancelProgress ? (
+              <Button variant="outline" onClick={onCancel}>
+                {t("settings.installer.cancel")}
+              </Button>
+            ) : null
           ) : result ? (
             <>
               {canRetry && onRetry && (
@@ -220,8 +240,8 @@ export function ToolInstallDialog({
                 {t("common.cancel")}
               </Button>
               <Button
-                disabled={!canContinue}
-                onClick={() => onConfirm(required.map((action) => action.id))}
+                disabled={!canContinue || confirming}
+                onClick={() => void confirm()}
               >
                 {t("settings.installer.continue")}
               </Button>

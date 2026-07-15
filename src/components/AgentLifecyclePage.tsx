@@ -33,6 +33,8 @@ import type {
 import { motion } from "framer-motion";
 import { APP_ICON_MAP } from "@/config/appConfig";
 import type { AppId } from "@/lib/api/types";
+import { buildWslLifecycleOverrides } from "@/lib/installEnvironment";
+import { mergeInstallTaskSnapshot } from "@/lib/installTaskState";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import { isWindows } from "@/lib/platform";
 import { isUpdateAvailable } from "@/lib/version";
@@ -437,11 +439,12 @@ export function AgentLifecyclePage() {
               if (flow.preparation?.requires_confirmation && !snapshot.result) {
                 return flow;
               }
+              const task = mergeInstallTaskSnapshot(flow.task, snapshot);
               return {
                 visible: true,
                 preparation: null,
-                task: snapshot,
-                tools: snapshot.request.tools as ToolName[],
+                task,
+                tools: task.request.tools as ToolName[],
               };
             });
             if (event.type === "finished") {
@@ -600,17 +603,22 @@ export function AgentLifecyclePage() {
           const previousTool = toolVersionByName.get(toolName);
           const previousVersion = previousTool?.version ?? null;
           const previousLatestVersion = previousTool?.latest_version ?? null;
+          const lifecycleOverrides = buildWslLifecycleOverrides(
+            [toolName],
+            { [toolName]: previousTool?.env_type },
+            wslShellByTool,
+          );
 
           await settingsApi.runToolLifecycleAction(
             [toolName],
             action,
-            wslShellByTool,
+            lifecycleOverrides,
           );
           if (!mounted.current) return;
           // 静默执行真正结束后刷新该工具版本，卡片立即反映结果。
           const refreshed = await refreshToolVersions(
             [toolName],
-            wslShellByTool,
+            lifecycleOverrides,
           );
           if (!mounted.current) return;
           const tool = refreshed.find((t) => t.name === toolName);
@@ -867,24 +875,23 @@ export function AgentLifecyclePage() {
     async (actionIds: string[]) => {
       const preparation = installFlow.preparation;
       if (!preparation) return;
+      const tools = installFlow.tools;
       try {
         await installerApi.start({
           request: {
             task_id: preparation.task_id,
-            tools: installFlow.tools,
+            tools,
             action: "install",
           },
           confirmed_action_ids: actionIds,
         });
         if (!mounted.current) return;
-        setInstallFlow({
-          visible: true,
-          preparation: null,
-          task: {
+        setInstallFlow((flow) => {
+          const task = mergeInstallTaskSnapshot(flow.task, {
             task_id: preparation.task_id,
             request: {
               task_id: preparation.task_id,
-              tools: installFlow.tools,
+              tools,
               action: "install",
             },
             stage: "repairing",
@@ -892,8 +899,13 @@ export function AgentLifecyclePage() {
             result: null,
             cancellation_requested: false,
             interrupted: false,
-          },
-          tools: installFlow.tools,
+          });
+          return {
+            visible: true,
+            preparation: null,
+            task,
+            tools,
+          };
         });
       } catch (error) {
         if (!mounted.current) return;

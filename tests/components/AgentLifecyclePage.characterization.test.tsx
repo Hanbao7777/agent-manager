@@ -465,9 +465,27 @@ describe("AgentLifecyclePage characterization", () => {
       plan: { actions: [] },
     });
     cancelInstall.mockReturnValue(cancellation);
+    getInstallTask.mockResolvedValue({
+      task_id: "install-1",
+      request: { task_id: "install-1", tools: ["claude"], action: "install" },
+      stage: "installing_tools",
+      plan: { actions: [] },
+      result: null,
+      cancellation_requested: false,
+      interrupted: false,
+    });
     const view = render(<AgentLifecyclePage />);
     fireEvent.click((await screen.findAllByText("settings.toolInstall"))[0]);
     fireEvent.click(await screen.findByText("settings.installer.continue"));
+    await waitFor(() => expect(startInstall).toHaveBeenCalledOnce());
+    const listener = listenAllInstall.mock.calls[0][0] as (
+      event: unknown,
+    ) => Promise<void>;
+    await listener({
+      type: "stage_changed",
+      task_id: "install-1",
+      stage: "installing_tools",
+    });
     await screen.findByText("settings.installer.cancel");
 
     fireEvent.click(screen.getByText("settings.installer.cancel"));
