@@ -3,8 +3,36 @@ name: CI
 on:
   pull_request:
     branches: [main]
+    paths:
+      - ".github/workflows/ci.yml"
+      - "src/**"
+      - "src-tauri/**"
+      - "tests/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "rust-toolchain.toml"
+      - "tsconfig*.json"
+      - "vite.config.*"
+      - "vitest.config.*"
+      - "tailwind.config.*"
+      - "postcss.config.*"
   push:
     branches: [main]
+    paths:
+      - ".github/workflows/ci.yml"
+      - "src/**"
+      - "src-tauri/**"
+      - "tests/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "rust-toolchain.toml"
+      - "tsconfig*.json"
+      - "vite.config.*"
+      - "vitest.config.*"
+      - "tailwind.config.*"
+      - "postcss.config.*"
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -76,8 +104,9 @@ jobs:
           sudo apt-get install -y --no-install-recommends libsoup-3.0-dev \
             || sudo apt-get install -y --no-install-recommends libsoup2.4-dev
 
-      - name: Cache Cargo registry and build
-        uses: actions/cache@v5
+      - name: Restore Cargo registry and build cache
+        id: cargo-cache
+        uses: actions/cache/restore@v5
         with:
           path: |
             ~/.cargo/registry
@@ -97,3 +126,13 @@ jobs:
 
       - name: Run tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Save Cargo registry and build cache from main
+        if: github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
