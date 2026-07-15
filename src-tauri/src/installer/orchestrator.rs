@@ -1069,6 +1069,16 @@ mod tests {
         assert!(snapshot.available_disk_bytes < u64::MAX);
     }
 
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn writability_probe_rejects_a_file_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let file_path = directory.path().join("not-a-directory");
+        std::fs::write(&file_path, b"fixture").unwrap();
+
+        assert!(!directory_writable(&file_path));
+    }
+
     #[test]
     fn confirmed_batch_repairs_once_and_finishes() {
         let store = InstallTaskStore::default();
