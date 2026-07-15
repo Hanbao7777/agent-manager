@@ -613,6 +613,33 @@ fn terminal_events(task: &InstallTaskSnapshot) -> Vec<super::InstallTaskEvent> {
 /// an unapproved fallback installer.
 pub struct CommandRuntime;
 
+#[cfg(target_os = "windows")]
+fn available_disk_bytes(path: &Path) -> Result<u64, InstallFailure> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+
+    let wide_path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut available_to_caller = 0_u64;
+    let succeeded = unsafe {
+        GetDiskFreeSpaceExW(
+            wide_path.as_ptr(),
+            &mut available_to_caller,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    if succeeded == 0 {
+        return Err(failure(
+            InstallFailureCode::InstallerFailure,
+            &format!(
+                "failed to measure available disk space: {}",
+                std::io::Error::last_os_error()
+            ),
+        ));
+    }
+    Ok(available_to_caller)
+}
+
 impl OrchestratorRuntime for CommandRuntime {
     fn snapshot(&self) -> Result<EnvironmentSnapshot, InstallFailure> {
         let path = std::env::var_os("PATH").unwrap_or_default();
@@ -631,6 +658,10 @@ impl OrchestratorRuntime for CommandRuntime {
                 "native installer is limited to Windows and macOS",
             ));
         };
+        #[cfg(target_os = "windows")]
+        let available_disk_bytes = available_disk_bytes(&std::env::temp_dir())?;
+        #[cfg(not(target_os = "windows"))]
+        let available_disk_bytes = u64::MAX;
         Ok(EnvironmentSnapshot {
             platform,
             architecture: if cfg!(target_arch = "aarch64") {
@@ -650,7 +681,7 @@ impl OrchestratorRuntime for CommandRuntime {
             node_installations: node.into_iter().map(|p| p.display().to_string()).collect(),
             npm_installations: npm.into_iter().map(|p| p.display().to_string()).collect(),
             path: entries.iter().map(|p| p.display().to_string()).collect(),
-            available_disk_bytes: u64::MAX,
+            available_disk_bytes,
             temporary_directory_writable: true,
             install_directory_writable: true,
             npm_prefix_writable: true,
@@ -1030,7 +1061,7 @@ mod tests {
         );
     }
 
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     #[test]
     fn production_snapshot_reports_measured_disk_space() {
         let snapshot = CommandRuntime.snapshot().unwrap();
