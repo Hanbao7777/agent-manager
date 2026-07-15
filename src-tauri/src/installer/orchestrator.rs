@@ -640,6 +640,29 @@ fn available_disk_bytes(path: &Path) -> Result<u64, InstallFailure> {
     Ok(available_to_caller)
 }
 
+#[cfg(target_os = "windows")]
+fn directory_writable(path: &Path) -> bool {
+    static PROBE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+    if !path.is_dir() {
+        return false;
+    }
+    let probe_path = path.join(format!(
+        ".agent-manager-write-probe-{}-{}",
+        std::process::id(),
+        PROBE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let created = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe_path);
+    let Ok(file) = created else {
+        return false;
+    };
+    drop(file);
+    std::fs::remove_file(probe_path).is_ok()
+}
+
 impl OrchestratorRuntime for CommandRuntime {
     fn snapshot(&self) -> Result<EnvironmentSnapshot, InstallFailure> {
         let path = std::env::var_os("PATH").unwrap_or_default();
@@ -660,8 +683,12 @@ impl OrchestratorRuntime for CommandRuntime {
         };
         #[cfg(target_os = "windows")]
         let available_disk_bytes = available_disk_bytes(&std::env::temp_dir())?;
+        #[cfg(target_os = "windows")]
+        let temporary_directory_writable = directory_writable(&std::env::temp_dir());
         #[cfg(not(target_os = "windows"))]
         let available_disk_bytes = u64::MAX;
+        #[cfg(not(target_os = "windows"))]
+        let temporary_directory_writable = true;
         Ok(EnvironmentSnapshot {
             platform,
             architecture: if cfg!(target_arch = "aarch64") {
@@ -682,7 +709,7 @@ impl OrchestratorRuntime for CommandRuntime {
             npm_installations: npm.into_iter().map(|p| p.display().to_string()).collect(),
             path: entries.iter().map(|p| p.display().to_string()).collect(),
             available_disk_bytes,
-            temporary_directory_writable: true,
+            temporary_directory_writable,
             install_directory_writable: true,
             npm_prefix_writable: true,
             npm_cache_writable: true,
@@ -1077,6 +1104,7 @@ mod tests {
         std::fs::write(&file_path, b"fixture").unwrap();
 
         assert!(!directory_writable(&file_path));
+        assert!(directory_writable(directory.path()));
     }
 
     #[test]
