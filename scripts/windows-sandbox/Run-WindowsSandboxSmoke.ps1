@@ -16,6 +16,30 @@ function Invoke-Step([string]$Name, [scriptblock]$Action) {
     catch { return [ordered]@{ name = $Name; status = 'failed'; error = $_.Exception.Message; started_utc = $started.ToString('o'); ended_utc = [DateTime]::UtcNow.ToString('o') } }
 }
 function Quote-ProcessArgument([string]$Value) { return '"' + $Value.Replace('"', '\"') + '"' }
+function Expand-PortableZip([string]$ZipPath, [string]$DestinationPath) {
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $destination = [IO.Path]::GetFullPath($DestinationPath)
+    [IO.Directory]::CreateDirectory($destination) | Out-Null
+    $destinationPrefix = $destination.TrimEnd('\') + '\'
+    $archive = [IO.Compression.ZipFile]::OpenRead($ZipPath)
+    try {
+        foreach ($entry in $archive.Entries) {
+            $entryPath = $entry.FullName.Replace('/', '\')
+            if ([string]::IsNullOrWhiteSpace($entryPath)) { continue }
+            if ([IO.Path]::IsPathRooted($entryPath) -or $entryPath.Contains(':')) { throw "Unsafe portable ZIP entry: $entryPath" }
+            $target = [IO.Path]::GetFullPath((Join-Path $destination $entryPath))
+            if (-not $target.StartsWith($destinationPrefix, [StringComparison]::OrdinalIgnoreCase)) { throw "Portable ZIP entry escapes destination: $entryPath" }
+            if ($entry.FullName.EndsWith('/')) {
+                [IO.Directory]::CreateDirectory($target) | Out-Null
+                continue
+            }
+            $parent = [IO.Path]::GetDirectoryName($target)
+            if ($parent) { [IO.Directory]::CreateDirectory($parent) | Out-Null }
+            [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $target, $false)
+        }
+    } finally { $archive.Dispose() }
+}
 function Get-ShortcutTarget {
     $shell = New-Object -ComObject WScript.Shell
     $roots = @(
@@ -138,7 +162,7 @@ $steps += Invoke-Step 'msi-uninstall' {
 }
 $steps += Invoke-Step 'portable-launch-render-evidence' {
     $portableRoot = Join-Path $env:TEMP "AgentManagerSmoke-$RunId"
-    Expand-Archive -LiteralPath (Join-Path $inputRoot 'Agent-Manager-Portable.zip') -DestinationPath $portableRoot -Force
+    Expand-PortableZip (Join-Path $inputRoot 'Agent-Manager-Portable.zip') $portableRoot
     $app = Get-ChildItem -LiteralPath $portableRoot -Filter 'agent-manager.exe' -Recurse -File
     if (@($app).Count -ne 1) { throw 'Portable agent-manager.exe contract was not satisfied.' }
     $app = $app[0]

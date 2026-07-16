@@ -52,4 +52,11 @@ Describe 'Windows Sandbox smoke harness static contract' {
         $text | Should Match 'UTF8.GetBytes\(\(Get-ManifestPayloadJson \$manifest\)\)'
         $text | Should Match 'manifest payload hash mismatch'
     }
+    It 'extracts the portable package without the sandbox Archive module' {
+        $text = Get-Content (Join-Path $root 'Run-WindowsSandboxSmoke.ps1') -Raw
+        $text | Should Not Match 'Expand-Archive'
+        $text | Should Match 'IO\.Compression\.ZipFile\]::OpenRead'
+        $text | Should Match 'StartsWith\(\$destinationPrefix, \[StringComparison\]::OrdinalIgnoreCase\)'
+        $text | Should Match 'ZipFileExtensions\]::ExtractToFile'
+    }
 }
