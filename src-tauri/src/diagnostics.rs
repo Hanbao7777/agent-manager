@@ -790,16 +790,17 @@ mod tests {
     #[test]
     fn export_writes_the_exact_stored_report_and_cleans_failed_temporary_files() {
         let directory = tempfile::tempdir().unwrap();
-        let destination = directory.path().join("diagnostic.json");
+        let directory_path = std::fs::canonicalize(directory.path()).unwrap();
+        let destination = directory_path.join("diagnostic.json");
         export_document("{\"safe\":true}", &destination, 7).unwrap();
         assert_eq!(
             std::fs::read_to_string(&destination).unwrap(),
             "{\"safe\":true}"
         );
-        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+        assert_eq!(std::fs::read_dir(&directory_path).unwrap().count(), 1);
 
-        let blocked = directory.path().join("blocked.json");
-        let temporary = directory.path().join(".blocked.json.test.tmp");
+        let blocked = directory_path.join("blocked.json");
+        let temporary = directory_path.join(".blocked.json.test.tmp");
         assert_eq!(
             write_and_publish("data", &blocked, &temporary, |_, _| {
                 Err(std::io::Error::other("injected replacement failure"))
@@ -812,7 +813,8 @@ mod tests {
     #[test]
     fn export_refuses_existing_relative_wrong_extension_and_symlink_parent_paths() {
         let directory = tempfile::tempdir().unwrap();
-        let existing = directory.path().join("existing.json");
+        let directory_path = std::fs::canonicalize(directory.path()).unwrap();
+        let existing = directory_path.join("existing.json");
         std::fs::write(&existing, "keep").unwrap();
 
         assert_eq!(
@@ -830,7 +832,7 @@ mod tests {
         );
         assert_eq!(
             validate_export_shape(
-                &directory.path().join("report.txt"),
+                &directory_path.join("report.txt"),
                 ExportParentKind::Directory,
                 false,
             ),
@@ -838,7 +840,7 @@ mod tests {
         );
         assert_eq!(
             validate_export_shape(
-                &directory.path().join("linked").join("report.json"),
+                &directory_path.join("linked").join("report.json"),
                 ExportParentKind::Symlink,
                 false,
             ),
@@ -849,8 +851,8 @@ mod tests {
         {
             use std::os::unix::fs::symlink;
 
-            let linked_parent = directory.path().join("linked-parent");
-            symlink(directory.path(), &linked_parent).unwrap();
+            let linked_parent = directory_path.join("linked-parent");
+            symlink(&directory_path, &linked_parent).unwrap();
             assert_eq!(
                 validate_export_path(&linked_parent.join("report.json")),
                 Err("diagnostics.error.invalid_export_path".to_string())
