@@ -62,8 +62,8 @@ Every phase must be implemented as a bounded task. A Worker self-review is neces
 
 | Phase | Deliverable | Status | Acceptance evidence |
 | --- | --- | --- | --- |
-| 0 | Record decisions and execution ledger | In progress | This document committed and Worker aligned to it |
-| 1 | Cross-platform system-access probes | In progress | Real Windows/macOS disk and temp writability; focused tests; coordinator acceptance |
+| 0 | Record decisions and execution ledger | Complete | Roadmap commit `211b45db`; Worker aligned to it |
+| 1 | Cross-platform system-access probes | Complete | Accepted commit `b4f7fbd2`; Windows/macOS artifact-free CI passed |
 | 2 | Structured path-access snapshot | Not started | No production sentinel values; managed install/cache paths and volume-aware 1 GiB policy tested |
 | 3 | Managed latest-version npm installs | Not started | Allowlisted latest resolution, isolated versions, verified atomic activation, two-version retention, 500 MiB cache cap |
 | 4 | Safe user PATH persistence | Not started | Windows rollback/refresh; zsh/bash atomic managed block; malformed marker and unsupported-shell behavior tested |
@@ -82,14 +82,14 @@ Allowed behavior: real disk space and temporary-directory write/delete probes on
 
 Acceptance checklist:
 
-- [ ] Windows keeps `GetDiskFreeSpaceExW` behavior behind a focused interface.
-- [ ] macOS uses an OS API with checked arithmetic and structured failures.
-- [ ] Write probes use collision-resistant create-new semantics and clean up after success.
-- [ ] File paths and unwritable directories are rejected without residue.
-- [ ] Linux remains unsupported and platform code is correctly gated.
-- [ ] Worker reports self-review, changed files, commands, and risks.
-- [ ] Coordinator inspects every change and reruns proportionate validation.
-- [ ] Windows and macOS GitHub verification both pass with artifact building disabled.
+- [x] Windows keeps `GetDiskFreeSpaceExW` behavior behind a focused interface.
+- [x] macOS uses `statvfs` with checked arithmetic and structured failures.
+- [x] Write probes use collision-resistant create-new semantics and clean up after success.
+- [x] File paths and unwritable directories are rejected without residue.
+- [x] Linux remains unsupported and platform code is correctly gated.
+- [x] Worker reports self-review, changed files, commands, and risks.
+- [x] Coordinator inspects every change and reruns proportionate validation.
+- [x] Windows and macOS GitHub verification both pass with artifact building disabled.
 
 ### Phase 2 — Structured path access
 
@@ -171,4 +171,4 @@ Packaging is allowed only after Phases 1–7 are accepted. Publishing a stable r
 | Date | Phase | Commit | Windows CI | macOS CI | Coordinator result | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | 2026-07-16 | Baseline | `edde7196` | `29437251201` (prior Windows baseline at `84081271`) | `29459832606` | Accepted as starting point | Both artifact-free workflows passed; Phase 1 Worker active |
-
+| 2026-07-16 | 1 | `b4f7fbd2` | `29461965986` | `29461967206` | Accepted | Worker `bed6b7e2-5e36-4c66-9545-bed410d7c733`; Windows 6m50s, macOS 3m14s; all checks/tests passed; packaging skipped |
