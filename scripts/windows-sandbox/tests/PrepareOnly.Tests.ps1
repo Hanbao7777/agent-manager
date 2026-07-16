@@ -37,6 +37,7 @@ Describe 'Windows Sandbox smoke prepare-only contract' {
         $config.Configuration.AudioInput | Should Be 'Disable'
         $config.Configuration.VideoInput | Should Be 'Disable'
         $config.Configuration.VGpu | Should Be 'Disable'
+        $config.Configuration.MemoryInMB | Should Be '2048'
         $controlManifest = Get-Content (Join-Path $control 'manifest.json') -Raw | ConvertFrom-Json
         $payload = [ordered]@{
             schema = [int]$controlManifest.schema

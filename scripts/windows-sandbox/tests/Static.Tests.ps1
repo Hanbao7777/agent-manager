@@ -14,6 +14,7 @@ Describe 'Windows Sandbox smoke harness static contract' {
         $text | Should Match '<AudioInput>Disable</AudioInput>'
         $text | Should Match '<VideoInput>Disable</VideoInput>'
         $text | Should Match '<VGpu>Disable</VGpu>'
+        $text | Should Match '<MemoryInMB>2048</MemoryInMB>'
         $text | Should Match '\$Launch'
         $text | Should Match 'Start-Process -FilePath \$wsbPath'
         $text | Should Not Match '& WindowsSandbox\.exe \$wsbPath'

@@ -98,6 +98,7 @@ $wsb = @"
   <AudioInput>Disable</AudioInput>
   <VideoInput>Disable</VideoInput>
   <VGpu>Disable</VGpu>
+  <MemoryInMB>2048</MemoryInMB>
   <MappedFolders>
     <MappedFolder><HostFolder>$([Security.SecurityElement]::Escape($input))</HostFolder><SandboxFolder>C:\AgentManagerHarness\Input</SandboxFolder><ReadOnly>true</ReadOnly></MappedFolder>
     <MappedFolder><HostFolder>$([Security.SecurityElement]::Escape($output))</HostFolder><SandboxFolder>C:\AgentManagerHarness\Evidence</SandboxFolder><ReadOnly>false</ReadOnly></MappedFolder>
