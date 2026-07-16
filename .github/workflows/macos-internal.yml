@@ -8,6 +8,11 @@ on:
         required: false
         type: boolean
         default: false
+      release_candidate_intel:
+        description: Run the release-candidate suite on standard Intel macOS instead of Apple Silicon
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -18,16 +23,23 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-14
+    name: ${{ inputs.release_candidate_intel && 'Intel release-candidate verification' || 'Apple Silicon verification' }}
+    runs-on: ${{ inputs.release_candidate_intel && 'macos-15-intel' || 'macos-15' }}
     timeout-minutes: ${{ inputs.build_artifacts && 35 || 15 }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22.12.0"
+
+      - name: Verify selected runner architecture
+        shell: bash
+        env:
+          EXPECTED_ARCH: ${{ inputs.release_candidate_intel && 'x86_64' || 'arm64' }}
+        run: test "$(uname -m)" = "$EXPECTED_ARCH"
 
       - name: Enable pinned Corepack and pnpm
         shell: bash
@@ -41,8 +53,9 @@ jobs:
           test "$(pnpm --version)" = "10.12.3"
 
       - name: Setup Rust Apple targets
-        uses: dtolnay/rust-toolchain@1.95.0
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable action, Rust 1.95.0
         with:
+          toolchain: 1.95.0
           targets: aarch64-apple-darwin,x86_64-apple-darwin
           components: rustfmt,clippy
 
@@ -181,7 +194,7 @@ jobs:
 
       - name: Upload internal build artifact
         if: inputs.build_artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: Agent-Manager-0.1.0-macOS-Universal-internal
           path: internal-artifacts/
