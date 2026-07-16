@@ -16,6 +16,7 @@ import {
   type DiagnosticReportPreview,
   type DiagnosticToolInput,
 } from "@/lib/api";
+import { extractErrorMessage } from "@/utils/errorUtils";
 
 interface DiagnosticReportDialogProps {
   tools: DiagnosticToolInput[];
@@ -32,6 +33,7 @@ export function DiagnosticReportDialog({
   const [exportPath, setExportPath] = useState("");
   const [generating, setGenerating] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [openingIssue, setOpeningIssue] = useState(false);
 
   const reset = () => {
     setSummary("");
@@ -40,6 +42,7 @@ export function DiagnosticReportDialog({
     setExportPath("");
     setGenerating(false);
     setExporting(false);
+    setOpeningIssue(false);
   };
 
   const handleOpenChange = (nextOpen: boolean) => {
@@ -71,9 +74,17 @@ export function DiagnosticReportDialog({
     }
   };
 
-  const openIssue = () => {
-    if (!preview?.issue_url) return;
-    window.open(preview.issue_url, "_blank", "noopener,noreferrer");
+  const openIssue = async () => {
+    if (!preview?.public_issue_allowed) return;
+    setOpeningIssue(true);
+    try {
+      await diagnosticsApi.openIssue(preview.report_id);
+    } catch (error) {
+      const key = extractErrorMessage(error);
+      toast.error(t(key || "settings.diagnostics.error.issueOpenFailed"));
+    } finally {
+      setOpeningIssue(false);
+    }
   };
 
   return (
@@ -155,6 +166,11 @@ export function DiagnosticReportDialog({
                     )}
                   </p>
                 )}
+                {preview.public_issue_allowed && (
+                  <p className="rounded-md border border-blue-500/30 bg-blue-500/10 p-3 text-xs text-blue-700 dark:text-blue-300">
+                    {t("settings.diagnostics.reviewNotice")}
+                  </p>
+                )}
                 <div className="space-y-2">
                   <label className="text-sm font-medium" htmlFor="export-path">
                     {t("settings.diagnostics.exportPath")}
@@ -207,9 +223,17 @@ export function DiagnosticReportDialog({
                 <Button variant="outline" onClick={() => setPreview(null)}>
                   {t("settings.diagnostics.edit")}
                 </Button>
-                {preview.issue_url && (
-                  <Button onClick={openIssue} className="gap-2">
-                    <Send className="h-4 w-4" />
+                {preview.public_issue_allowed && (
+                  <Button
+                    onClick={() => void openIssue()}
+                    disabled={openingIssue}
+                    className="gap-2"
+                  >
+                    {openingIssue ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Send className="h-4 w-4" />
+                    )}
                     {t("settings.diagnostics.send")}
                   </Button>
                 )}

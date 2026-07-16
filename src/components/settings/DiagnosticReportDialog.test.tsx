@@ -2,15 +2,18 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DiagnosticReportDialog } from "./DiagnosticReportDialog";
 
-const { generate, exportReport, toastSuccess, toastError } = vi.hoisted(() => ({
-  generate: vi.fn(),
-  exportReport: vi.fn(),
-  toastSuccess: vi.fn(),
-  toastError: vi.fn(),
-}));
+const { generate, exportReport, openIssue, toastSuccess, toastError } = vi.hoisted(
+  () => ({
+    generate: vi.fn(),
+    exportReport: vi.fn(),
+    openIssue: vi.fn(),
+    toastSuccess: vi.fn(),
+    toastError: vi.fn(),
+  }),
+);
 
 vi.mock("@/lib/api", () => ({
-  diagnosticsApi: { generate, export: exportReport },
+  diagnosticsApi: { generate, export: exportReport, openIssue },
 }));
 
 vi.mock("react-i18next", () => ({
@@ -34,8 +37,7 @@ const publicPreview = {
   report_id: "diagnostic-1",
   issue_title: "[Diagnostics] Agent Manager report",
   issue_body: "exact reviewed body",
-  issue_url:
-    "https://github.com/Hanbao7777/agent-manager/issues/new?title=reviewed&body=exact",
+  public_issue_allowed: true,
   public_block_reason: null,
   public_body_limit_bytes: 6000,
   public_url_limit_bytes: 8000,
@@ -46,15 +48,15 @@ describe("DiagnosticReportDialog", () => {
     vi.clearAllMocks();
     generate.mockResolvedValue(publicPreview);
     exportReport.mockResolvedValue(undefined);
+    openIssue.mockResolvedValue(undefined);
   });
 
-  it("requires preview review before opening the exact issue URL", async () => {
-    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+  it("requires preview review before opening by report ID only", async () => {
     render(<DiagnosticReportDialog tools={tools} />);
 
     fireEvent.click(screen.getByText("settings.diagnostics.create"));
     expect(screen.queryByText("settings.diagnostics.send")).not.toBeInTheDocument();
-    expect(open).not.toHaveBeenCalled();
+    expect(openIssue).not.toHaveBeenCalled();
 
     fireEvent.change(
       screen.getByPlaceholderText("settings.diagnostics.summaryPlaceholder"),
@@ -68,20 +70,17 @@ describe("DiagnosticReportDialog", () => {
       sensitive: false,
       tools,
     });
-    expect(open).not.toHaveBeenCalled();
+    expect(openIssue).not.toHaveBeenCalled();
+    expect(screen.getByText("settings.diagnostics.reviewNotice")).toBeInTheDocument();
 
     fireEvent.click(screen.getByText("settings.diagnostics.send"));
-    expect(open).toHaveBeenCalledWith(
-      publicPreview.issue_url,
-      "_blank",
-      "noopener,noreferrer",
-    );
+    await waitFor(() => expect(openIssue).toHaveBeenCalledWith("diagnostic-1"));
   });
 
   it("keeps sensitive and oversized previews export-only", async () => {
     generate.mockResolvedValue({
       ...publicPreview,
-      issue_url: null,
+      public_issue_allowed: false,
       public_block_reason: "oversized",
     });
     render(<DiagnosticReportDialog tools={tools} />);
@@ -91,6 +90,7 @@ describe("DiagnosticReportDialog", () => {
     await screen.findByText("settings.diagnostics.blocked.oversized");
 
     expect(screen.queryByText("settings.diagnostics.send")).not.toBeInTheDocument();
+    expect(openIssue).not.toHaveBeenCalled();
     fireEvent.change(
       screen.getByPlaceholderText("settings.diagnostics.exportPlaceholder"),
       { target: { value: "C:\\Users\\Alice\\report.json" } },
@@ -105,6 +105,22 @@ describe("DiagnosticReportDialog", () => {
     );
     expect(toastSuccess).toHaveBeenCalledWith(
       "settings.diagnostics.exported",
+    );
+  });
+
+  it("shows localized feedback when public issue opening fails", async () => {
+    openIssue.mockRejectedValue("settings.diagnostics.error.issueOpenFailed");
+    render(<DiagnosticReportDialog tools={tools} />);
+
+    fireEvent.click(screen.getByText("settings.diagnostics.create"));
+    fireEvent.click(screen.getByText("settings.diagnostics.preview"));
+    await screen.findByText("exact reviewed body");
+    fireEvent.click(screen.getByText("settings.diagnostics.send"));
+
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith(
+        "settings.diagnostics.error.issueOpenFailed",
+      ),
     );
   });
 });

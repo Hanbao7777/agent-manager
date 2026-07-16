@@ -33,16 +33,25 @@
       "collectedFields": "仅包含应用版本、平台、工具状态、结构化安装状态和此描述。绝不收集环境变量或 Shell 配置文件内容。",
       "issueTitle": "公开 Issue 标题",
       "issueBody": "公开 Issue 的完整正文",
+      "reviewNotice": "发送会在 GitHub 中打开这份完整的公开 Issue。请在那里再次检查并自行提交；Agent Manager 不会代为提交。",
       "preview": "生成预览",
       "edit": "编辑并重新生成",
       "send": "发送给开发者",
       "exportPath": "本地导出路径",
       "exportPlaceholder": "以 .json 结尾的绝对路径",
       "export": "导出到本地",
-      "exportHint": "仅在你选择以 .json 结尾的本地绝对路径后写入。",
+      "exportHint": "仅写入新的本地 .json 绝对路径，绝不覆盖已有文件。",
       "exported": "诊断报告已导出",
       "exportFailed": "无法导出诊断报告，请检查路径后重试。",
       "generateFailed": "无法生成诊断报告。",
+      "error": {
+        "unavailable": "诊断报告当前不可用。",
+        "issueExpired": "此诊断预览已过期，请生成并检查新的预览。",
+        "issueSensitive": "敏感报告不能作为公开 Issue 打开。",
+        "issueOversized": "超大报告不能作为公开 Issue 打开。",
+        "issueUnavailable": "此报告不能用于公开 Issue。",
+        "issueOpenFailed": "无法打开 GitHub，请导出到本地或重试。"
+      },
       "blocked": {
         "sensitive": "此报告已标记为敏感，只能导出到本地。",
         "oversized": "此报告超过公开 Issue 的保守大小限制，只能导出到本地。"

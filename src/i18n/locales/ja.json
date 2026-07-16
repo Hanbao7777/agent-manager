@@ -33,16 +33,25 @@
       "collectedFields": "アプリのバージョン、プラットフォーム、ツール状態、構造化されたインストール状態、この説明のみを含みます。環境変数やシェルプロファイルの内容は収集しません。",
       "issueTitle": "公開 Issue のタイトル",
       "issueBody": "公開 Issue の正確な本文",
+      "reviewNotice": "送信すると、この正確な公開 Issue を GitHub で開きます。GitHub 上で確認し、ご自身で送信してください。Agent Manager は送信しません。",
       "preview": "プレビューを生成",
       "edit": "編集して再生成",
       "send": "開発者に送る",
       "exportPath": "ローカル出力先",
       "exportPlaceholder": ".json で終わる絶対パス",
       "export": "ローカルに出力",
-      "exportHint": "選択した絶対パスの .json ファイルにのみ出力します。",
+      "exportHint": "新しい絶対パスの .json ファイルにのみ出力し、既存ファイルは上書きしません。",
       "exported": "診断レポートを出力しました",
       "exportFailed": "診断レポートを出力できませんでした。パスを確認して再試行してください。",
       "generateFailed": "診断レポートを生成できませんでした。",
+      "error": {
+        "unavailable": "診断レポートを利用できません。",
+        "issueExpired": "この診断プレビューは期限切れです。新しいプレビューを生成して確認してください。",
+        "issueSensitive": "この機密レポートは公開 Issue として開けません。",
+        "issueOversized": "この大きすぎるレポートは公開 Issue として開けません。",
+        "issueUnavailable": "このレポートは公開 Issue に利用できません。",
+        "issueOpenFailed": "GitHub を開けませんでした。ローカルに出力するか、再試行してください。"
+      },
       "blocked": {
         "sensitive": "このレポートは機密として指定されています。ローカル出力のみ利用できます。",
         "oversized": "このレポートは公開 Issue の保守的なサイズ上限を超えています。ローカル出力のみ利用できます。"

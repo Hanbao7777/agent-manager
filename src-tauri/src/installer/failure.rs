@@ -716,12 +716,12 @@ mod tests {
 
     #[test]
     fn normalizes_cross_platform_home_paths_and_environment_values() {
-        let raw = r#"C:\Users\Alice\AppData /Users/bob/.config /home/carol/.cache PATH=/secret/bin HOME='/Users/bob'"#;
+        let raw = r#"C:\Users\Alice\AppData /Users/bob/.config /home/carol/.cache PATH=/secret/bin HomeDir='/Users/bob' mixed_Case=value lowercase=hidden"#;
         let clean = redact_diagnostic(raw);
 
         assert_eq!(
             clean,
-            r#"~\AppData ~/.config ~/.cache PATH=[REDACTED] HOME=[REDACTED]"#
+            r#"~\AppData ~/.config ~/.cache PATH=[REDACTED] HomeDir=[REDACTED] mixed_Case=[REDACTED] lowercase=[REDACTED]"#
         );
     }
 

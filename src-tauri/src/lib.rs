@@ -137,6 +137,7 @@ pub fn run() {
             installer::cancel_install_task,
             diagnostics::generate_diagnostic_report,
             diagnostics::export_diagnostic_report,
+            diagnostics::open_diagnostic_issue,
         ]);
 
     let app = builder

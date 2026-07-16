@@ -33,16 +33,25 @@
       "collectedFields": "Only app version, platform, tool status, structured install status, and this description are included. Environment and shell-profile contents are never collected.",
       "issueTitle": "Public issue title",
       "issueBody": "Exact public issue body",
+      "reviewNotice": "Send opens GitHub with this exact public issue. Review it there and submit it yourself; Agent Manager does not submit it.",
       "preview": "Generate preview",
       "edit": "Edit and regenerate",
       "send": "Send to developer",
       "exportPath": "Local export path",
       "exportPlaceholder": "Absolute path ending in .json",
       "export": "Export locally",
-      "exportHint": "Export writes only after you choose an absolute local .json path.",
+      "exportHint": "Export writes only to a new absolute local .json path and never overwrites an existing file.",
       "exported": "Diagnostic report exported",
       "exportFailed": "Could not export the diagnostic report. Check the path and try again.",
       "generateFailed": "Could not generate the diagnostic report.",
+      "error": {
+        "unavailable": "Diagnostic reporting is unavailable.",
+        "issueExpired": "This diagnostic preview has expired. Generate and review a new preview.",
+        "issueSensitive": "This sensitive report cannot be opened as a public issue.",
+        "issueOversized": "This oversized report cannot be opened as a public issue.",
+        "issueUnavailable": "This report is not available for a public issue.",
+        "issueOpenFailed": "GitHub could not be opened. Export the report locally or try again."
+      },
       "blocked": {
         "sensitive": "This report is marked sensitive. It can only be exported locally.",
         "oversized": "This report exceeds the conservative public issue size limit. It can only be exported locally."

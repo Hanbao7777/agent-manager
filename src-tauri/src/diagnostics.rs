@@ -49,7 +49,7 @@ pub struct DiagnosticReportPreview {
     report_id: String,
     issue_title: String,
     issue_body: String,
-    issue_url: Option<String>,
+    public_issue_allowed: bool,
     public_block_reason: Option<PublicBlockReason>,
     public_body_limit_bytes: usize,
     public_url_limit_bytes: usize,
@@ -129,6 +129,8 @@ struct InstallationToolReport {
 
 struct StoredReport {
     document: String,
+    public_issue_url: Option<String>,
+    public_block_reason: Option<PublicBlockReason>,
 }
 
 #[derive(Default)]
@@ -139,7 +141,12 @@ pub struct DiagnosticReportStore {
 }
 
 impl DiagnosticReportStore {
-    fn insert(&self, document: String) -> Result<String, String> {
+    fn insert(
+        &self,
+        document: String,
+        public_issue_url: Option<String>,
+        public_block_reason: Option<PublicBlockReason>,
+    ) -> Result<String, String> {
         let report_id = format!(
             "diagnostic-{}",
             self.next_report_id.fetch_add(1, Ordering::Relaxed) + 1
@@ -161,7 +168,14 @@ impl DiagnosticReportStore {
                 reports.remove(&oldest);
             }
         }
-        reports.insert(report_id.clone(), StoredReport { document });
+        reports.insert(
+            report_id.clone(),
+            StoredReport {
+                document,
+                public_issue_url,
+                public_block_reason,
+            },
+        );
         Ok(report_id)
     }
 
@@ -172,6 +186,90 @@ impl DiagnosticReportStore {
             .get(report_id)
             .map(|report| report.document.clone())
             .ok_or_else(|| "diagnostics.error.report_expired".to_string())
+    }
+
+    fn public_issue_url(&self, report_id: &str) -> Result<String, String> {
+        let reports = self
+            .reports
+            .lock()
+            .map_err(|_| "settings.diagnostics.error.unavailable".to_string())?;
+        let report = reports
+            .get(report_id)
+            .ok_or_else(|| "settings.diagnostics.error.issueExpired".to_string())?;
+        if let Some(reason) = &report.public_block_reason {
+            return Err(match reason {
+                PublicBlockReason::Sensitive => "settings.diagnostics.error.issueSensitive",
+                PublicBlockReason::Oversized => "settings.diagnostics.error.issueOversized",
+            }
+            .to_string());
+        }
+        report
+            .public_issue_url
+            .clone()
+            .ok_or_else(|| "settings.diagnostics.error.issueUnavailable".to_string())
+    }
+}
+
+trait DiagnosticIssueOpener {
+    fn open(&self, url: &str) -> Result<(), ()>;
+}
+
+struct PlatformDiagnosticIssueOpener;
+
+#[cfg(target_os = "windows")]
+impl DiagnosticIssueOpener for PlatformDiagnosticIssueOpener {
+    fn open(&self, url: &str) -> Result<(), ()> {
+        use std::{os::windows::ffi::OsStrExt, ptr};
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+
+        let operation = std::ffi::OsStr::new("open")
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let target = std::ffi::OsStr::new(url)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let result = unsafe {
+            ShellExecuteW(
+                ptr::null_mut(),
+                operation.as_ptr(),
+                target.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                1,
+            )
+        };
+        ((result as isize) > 32).then_some(()).ok_or(())
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl DiagnosticIssueOpener for PlatformDiagnosticIssueOpener {
+    fn open(&self, url: &str) -> Result<(), ()> {
+        std::process::Command::new("/usr/bin/open")
+            .arg(url)
+            .spawn()
+            .map(|_| ())
+            .map_err(|_| ())
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl DiagnosticIssueOpener for PlatformDiagnosticIssueOpener {
+    fn open(&self, url: &str) -> Result<(), ()> {
+        std::process::Command::new("/usr/bin/xdg-open")
+            .arg(url)
+            .spawn()
+            .map(|_| ())
+            .map_err(|_| ())
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+impl DiagnosticIssueOpener for PlatformDiagnosticIssueOpener {
+    fn open(&self, _url: &str) -> Result<(), ()> {
+        Err(())
     }
 }
 
@@ -202,6 +300,25 @@ pub fn export_diagnostic_report(
         Path::new(&path),
         reports.next_export_id.fetch_add(1, Ordering::Relaxed),
     )
+}
+
+#[tauri::command]
+pub fn open_diagnostic_issue(
+    report_id: String,
+    reports: tauri::State<'_, DiagnosticReportStore>,
+) -> Result<(), String> {
+    open_stored_issue(&report_id, &reports, &PlatformDiagnosticIssueOpener)
+}
+
+fn open_stored_issue<O: DiagnosticIssueOpener>(
+    report_id: &str,
+    reports: &DiagnosticReportStore,
+    opener: &O,
+) -> Result<(), String> {
+    let url = reports.public_issue_url(report_id)?;
+    opener
+        .open(&url)
+        .map_err(|_| "settings.diagnostics.error.issueOpenFailed".to_string())
 }
 
 fn generate_preview(
@@ -245,13 +362,18 @@ fn generate_preview(
     } else {
         None
     };
-    let report_id = reports.insert(document)?;
+    let public_issue_allowed = public_block_reason.is_none();
+    let report_id = reports.insert(
+        document,
+        public_issue_allowed.then_some(issue_url),
+        public_block_reason.clone(),
+    )?;
 
     Ok(DiagnosticReportPreview {
         report_id,
         issue_title: ISSUE_TITLE.to_string(),
         issue_body,
-        issue_url: public_block_reason.is_none().then_some(issue_url),
+        public_issue_allowed,
         public_block_reason,
         public_body_limit_bytes: MAX_PUBLIC_ISSUE_BODY_BYTES,
         public_url_limit_bytes: MAX_PUBLIC_ISSUE_URL_BYTES,
@@ -342,19 +464,19 @@ fn build_issue_url(title: &str, body: &str) -> Result<String, String> {
 fn export_document(document: &str, destination: &Path, sequence: u64) -> Result<(), String> {
     validate_export_path(destination)?;
     let temporary = unique_temporary_path(destination, sequence);
-    write_and_replace(
+    write_and_publish(
         document,
         destination,
         &temporary,
-        |temporary, destination| crate::installer::replace_file(temporary, destination),
+        |temporary, destination| std::fs::hard_link(temporary, destination),
     )
 }
 
-fn write_and_replace<F>(
+fn write_and_publish<F>(
     document: &str,
     destination: &Path,
     temporary: &Path,
-    replace: F,
+    publish: F,
 ) -> Result<(), String>
 where
     F: FnOnce(&Path, &Path) -> std::io::Result<()>,
@@ -374,12 +496,16 @@ where
         return write_result;
     }
 
-    let result =
-        replace(temporary, destination).map_err(|_| "diagnostics.error.export_failed".to_string());
-    if result.is_err() {
+    if publish(temporary, destination).is_err() {
         let _ = std::fs::remove_file(temporary);
+        return Err("diagnostics.error.export_failed".to_string());
     }
-    result
+    if std::fs::remove_file(temporary).is_err() {
+        let _ = std::fs::remove_file(destination);
+        let _ = std::fs::remove_file(temporary);
+        return Err("diagnostics.error.export_failed".to_string());
+    }
+    Ok(())
 }
 
 fn validate_export_path(path: &Path) -> Result<(), String> {
@@ -392,15 +518,55 @@ fn validate_export_path(path: &Path) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| "diagnostics.error.invalid_export_path".to_string())?;
+    validate_export_parent_chain(parent)?;
     let metadata = std::fs::symlink_metadata(parent)
         .map_err(|_| "diagnostics.error.invalid_export_path".to_string())?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        return Err("diagnostics.error.invalid_export_path".to_string());
-    }
-    if let Ok(metadata) = std::fs::symlink_metadata(path) {
-        if !metadata.is_file() || metadata.file_type().is_symlink() {
+    let parent_kind = if metadata.file_type().is_symlink() {
+        ExportParentKind::Symlink
+    } else if metadata.is_dir() {
+        ExportParentKind::Directory
+    } else {
+        ExportParentKind::Other
+    };
+    validate_export_shape(path, parent_kind, std::fs::symlink_metadata(path).is_ok())
+}
+
+fn validate_export_parent_chain(parent: &Path) -> Result<(), String> {
+    let mut current = Some(parent);
+    while let Some(path) = current {
+        let metadata = std::fs::symlink_metadata(path)
+            .map_err(|_| "diagnostics.error.invalid_export_path".to_string())?;
+        if metadata.file_type().is_symlink() {
             return Err("diagnostics.error.invalid_export_path".to_string());
         }
+        current = path.parent();
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum ExportParentKind {
+    Directory,
+    Symlink,
+    Other,
+}
+
+fn validate_export_shape(
+    path: &Path,
+    parent_kind: ExportParentKind,
+    destination_exists: bool,
+) -> Result<(), String> {
+    if !path.is_absolute()
+        || path.file_name().is_none()
+        || path.extension().and_then(|extension| extension.to_str()) != Some("json")
+    {
+        return Err("diagnostics.error.invalid_export_path".to_string());
+    }
+    if !matches!(parent_kind, ExportParentKind::Directory) {
+        return Err("diagnostics.error.invalid_export_path".to_string());
+    }
+    if destination_exists {
+        return Err("diagnostics.error.export_exists".to_string());
     }
     Ok(())
 }
@@ -455,7 +621,9 @@ mod tests {
         assert!(!preview.issue_body.contains("user:pass"));
         assert!(!preview.issue_body.contains("hidden"));
         assert!(!preview.issue_body.contains("not-allowlisted"));
-        let url = url::Url::parse(preview.issue_url.as_deref().unwrap()).unwrap();
+        assert!(preview.public_issue_allowed);
+        let stored_url = store.public_issue_url(&preview.report_id).unwrap();
+        let url = url::Url::parse(&stored_url).unwrap();
         assert_eq!(url.scheme(), "https");
         assert_eq!(url.host_str(), Some("github.com"));
         assert_eq!(url.path(), "/Hanbao7777/agent-manager/issues/new");
@@ -478,7 +646,7 @@ mod tests {
             sensitive.public_block_reason,
             Some(PublicBlockReason::Sensitive)
         );
-        assert!(sensitive.issue_url.is_none());
+        assert!(!sensitive.public_issue_allowed);
 
         let oversized = generate_preview(
             request(&"x".repeat(MAX_PUBLIC_ISSUE_BODY_BYTES), false),
@@ -491,7 +659,89 @@ mod tests {
             oversized.public_block_reason,
             Some(PublicBlockReason::Oversized)
         );
-        assert!(oversized.issue_url.is_none());
+        assert!(!oversized.public_issue_allowed);
+        assert_eq!(
+            DiagnosticReportStore::default().public_issue_url("diagnostic-expired"),
+            Err("settings.diagnostics.error.issueExpired".to_string())
+        );
+    }
+
+    struct RecordingOpener(Mutex<Vec<String>>);
+
+    impl DiagnosticIssueOpener for RecordingOpener {
+        fn open(&self, url: &str) -> Result<(), ()> {
+            self.0.lock().unwrap().push(url.to_string());
+            Ok(())
+        }
+    }
+
+    struct FailingOpener;
+
+    impl DiagnosticIssueOpener for FailingOpener {
+        fn open(&self, _url: &str) -> Result<(), ()> {
+            Err(())
+        }
+    }
+
+    #[test]
+    fn issue_opening_uses_only_the_exact_stored_url() {
+        let store = DiagnosticReportStore::default();
+        let preview = generate_preview(
+            request("reviewed", false),
+            None,
+            &store,
+            "2026-07-16T12:00:00Z",
+        )
+        .unwrap();
+        let expected = store.public_issue_url(&preview.report_id).unwrap();
+        let opener = RecordingOpener(Mutex::new(Vec::new()));
+
+        open_stored_issue(&preview.report_id, &store, &opener).unwrap();
+
+        assert_eq!(opener.0.lock().unwrap().as_slice(), [expected]);
+    }
+
+    #[test]
+    fn issue_opening_rejects_blocked_expired_and_platform_failures() {
+        let store = DiagnosticReportStore::default();
+        let sensitive = generate_preview(
+            request("reviewed", true),
+            None,
+            &store,
+            "2026-07-16T12:00:00Z",
+        )
+        .unwrap();
+        let public = generate_preview(
+            request("reviewed", false),
+            None,
+            &store,
+            "2026-07-16T12:00:00Z",
+        )
+        .unwrap();
+        let oversized = generate_preview(
+            request(&"x".repeat(MAX_PUBLIC_ISSUE_BODY_BYTES), false),
+            None,
+            &store,
+            "2026-07-16T12:00:00Z",
+        )
+        .unwrap();
+
+        assert_eq!(
+            open_stored_issue(&sensitive.report_id, &store, &FailingOpener),
+            Err("settings.diagnostics.error.issueSensitive".to_string())
+        );
+        assert_eq!(
+            open_stored_issue("diagnostic-expired", &store, &FailingOpener),
+            Err("settings.diagnostics.error.issueExpired".to_string())
+        );
+        assert_eq!(
+            open_stored_issue(&oversized.report_id, &store, &FailingOpener),
+            Err("settings.diagnostics.error.issueOversized".to_string())
+        );
+        assert_eq!(
+            open_stored_issue(&public.report_id, &store, &FailingOpener),
+            Err("settings.diagnostics.error.issueOpenFailed".to_string())
+        );
     }
 
     #[test]
@@ -546,15 +796,65 @@ mod tests {
             std::fs::read_to_string(&destination).unwrap(),
             "{\"safe\":true}"
         );
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
 
         let blocked = directory.path().join("blocked.json");
         let temporary = directory.path().join(".blocked.json.test.tmp");
         assert_eq!(
-            write_and_replace("data", &blocked, &temporary, |_, _| {
+            write_and_publish("data", &blocked, &temporary, |_, _| {
                 Err(std::io::Error::other("injected replacement failure"))
             }),
             Err("diagnostics.error.export_failed".to_string())
         );
         assert!(!temporary.exists());
+    }
+
+    #[test]
+    fn export_refuses_existing_relative_wrong_extension_and_symlink_parent_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let existing = directory.path().join("existing.json");
+        std::fs::write(&existing, "keep").unwrap();
+
+        assert_eq!(
+            export_document("replace", &existing, 11),
+            Err("diagnostics.error.export_exists".to_string())
+        );
+        assert_eq!(std::fs::read_to_string(&existing).unwrap(), "keep");
+        assert_eq!(
+            validate_export_shape(
+                Path::new("relative.json"),
+                ExportParentKind::Directory,
+                false,
+            ),
+            Err("diagnostics.error.invalid_export_path".to_string())
+        );
+        assert_eq!(
+            validate_export_shape(
+                &directory.path().join("report.txt"),
+                ExportParentKind::Directory,
+                false,
+            ),
+            Err("diagnostics.error.invalid_export_path".to_string())
+        );
+        assert_eq!(
+            validate_export_shape(
+                &directory.path().join("linked").join("report.json"),
+                ExportParentKind::Symlink,
+                false,
+            ),
+            Err("diagnostics.error.invalid_export_path".to_string())
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            let linked_parent = directory.path().join("linked-parent");
+            symlink(directory.path(), &linked_parent).unwrap();
+            assert_eq!(
+                validate_export_path(&linked_parent.join("report.json")),
+                Err("diagnostics.error.invalid_export_path".to_string())
+            );
+        }
     }
 }

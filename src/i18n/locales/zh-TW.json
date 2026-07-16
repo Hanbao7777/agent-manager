@@ -33,16 +33,25 @@
       "collectedFields": "僅包含應用程式版本、平台、工具狀態、結構化安裝狀態和此描述。絕不收集環境變數或 Shell 設定檔內容。",
       "issueTitle": "公開 Issue 標題",
       "issueBody": "公開 Issue 的完整內文",
+      "reviewNotice": "傳送會在 GitHub 中開啟這份完整的公開 Issue。請在那裡再次檢查並自行提交；Agent Manager 不會代為提交。",
       "preview": "產生預覽",
       "edit": "編輯並重新產生",
       "send": "傳送給開發者",
       "exportPath": "本機匯出路徑",
       "exportPlaceholder": "以 .json 結尾的絕對路徑",
       "export": "匯出到本機",
-      "exportHint": "僅在你選擇以 .json 結尾的本機絕對路徑後寫入。",
+      "exportHint": "僅寫入新的本機 .json 絕對路徑，絕不覆寫現有檔案。",
       "exported": "診斷報告已匯出",
       "exportFailed": "無法匯出診斷報告，請檢查路徑後再試一次。",
       "generateFailed": "無法產生診斷報告。",
+      "error": {
+        "unavailable": "診斷報告目前無法使用。",
+        "issueExpired": "此診斷預覽已過期，請產生並檢查新的預覽。",
+        "issueSensitive": "敏感報告不能作為公開 Issue 開啟。",
+        "issueOversized": "過大的報告不能作為公開 Issue 開啟。",
+        "issueUnavailable": "此報告不能用於公開 Issue。",
+        "issueOpenFailed": "無法開啟 GitHub，請匯出到本機或再試一次。"
+      },
       "blocked": {
         "sensitive": "此報告已標記為敏感，只能匯出到本機。",
         "oversized": "此報告超過公開 Issue 的保守大小限制，只能匯出到本機。"
