@@ -1015,7 +1015,6 @@ impl OrchestratorRuntime for CommandRuntime {
             managed_bin,
             approved_runtime_dirs,
             managed_executable: executable,
-            executable_name: strategy.command_name.into(),
             expected_version: version,
             external_candidates: shadowed_external,
         };
@@ -1298,7 +1297,6 @@ mod tests {
             managed_bin: PathBuf::from("managed/bin"),
             approved_runtime_dirs: vec![PathBuf::from("runtime")],
             managed_executable: PathBuf::from("managed/bin/codex"),
-            executable_name: "codex".into(),
             expected_version: "1.0.0".into(),
             external_candidates: vec![PathBuf::from("external/codex")],
         }

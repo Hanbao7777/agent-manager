@@ -21,7 +21,6 @@ pub(crate) struct PathPersistenceRequest {
     pub(crate) managed_bin: PathBuf,
     pub(crate) approved_runtime_dirs: Vec<PathBuf>,
     pub(crate) managed_executable: PathBuf,
-    pub(crate) executable_name: String,
     pub(crate) expected_version: String,
     pub(crate) external_candidates: Vec<PathBuf>,
 }
@@ -33,7 +32,6 @@ impl PathPersistenceRequest {
             managed_bin: PathBuf::from(r"C:\managed\bin"),
             approved_runtime_dirs: vec![PathBuf::from(r"C:\runtime")],
             managed_executable: PathBuf::from(r"C:\managed\bin\codex.cmd"),
-            executable_name: "codex".into(),
             expected_version: "1.0.0".into(),
             external_candidates: vec![PathBuf::from(r"C:\external\codex.cmd")],
         }
@@ -45,7 +43,6 @@ pub(crate) struct PathProbeRequest {
     pub(crate) managed_bin: PathBuf,
     pub(crate) approved_runtime_dirs: Vec<PathBuf>,
     pub(crate) managed_executable: PathBuf,
-    pub(crate) executable_name: String,
     pub(crate) expected_version: String,
     pub(crate) external_candidates: Vec<PathBuf>,
 }
@@ -56,7 +53,6 @@ impl From<&PathPersistenceRequest> for PathProbeRequest {
             managed_bin: request.managed_bin.clone(),
             approved_runtime_dirs: request.approved_runtime_dirs.clone(),
             managed_executable: request.managed_executable.clone(),
-            executable_name: request.executable_name.clone(),
             expected_version: request.expected_version.clone(),
             external_candidates: request.external_candidates.clone(),
         }
@@ -79,7 +75,7 @@ impl CleanPathProbe for ProcessPathProbe {
     fn probe(&self, request: &PathProbeRequest) -> Result<PathProbeResult, InstallFailure> {
         let path = std::env::join_paths(clean_probe_paths(request))
             .map_err(|error| path_failure(&format!("failed to construct clean PATH: {error}")))?;
-        let mut command = std::process::Command::new(&request.executable_name);
+        let mut command = std::process::Command::new(&request.managed_executable);
         command.arg("--version").env_clear().env("PATH", path);
         #[cfg(target_os = "windows")]
         for name in ["SYSTEMROOT", "COMSPEC"] {
@@ -812,7 +808,6 @@ mod tests {
                 PathBuf::from("runtime/node"),
             ],
             managed_executable: PathBuf::from("managed/bin/codex"),
-            executable_name: "codex".into(),
             expected_version: "1.0.0".into(),
             external_candidates: vec![PathBuf::from("ambient/codex")],
         };
@@ -824,6 +819,28 @@ mod tests {
                 PathBuf::from("runtime/npm"),
             ]
         );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_clean_probe_executes_the_exact_cmd_launcher() {
+        let root = tempfile::tempdir().unwrap();
+        let managed_bin = root.path().join("managed").join("bin");
+        std::fs::create_dir_all(&managed_bin).unwrap();
+        let launcher = managed_bin.join("agent-manager-path-probe.cmd");
+        std::fs::write(&launcher, b"@echo off\r\necho probe-cli 1.2.3\r\n").unwrap();
+        let request = PathProbeRequest {
+            managed_bin,
+            approved_runtime_dirs: Vec::new(),
+            managed_executable: launcher.clone(),
+            expected_version: "1.2.3".into(),
+            external_candidates: Vec::new(),
+        };
+
+        let result = ProcessPathProbe.probe(&request).unwrap();
+
+        assert_eq!(result.selected, launcher);
+        assert!(result.shadowed.is_empty());
     }
 
     #[test]
@@ -901,7 +918,6 @@ mod tests {
             managed_bin: managed.clone(),
             approved_runtime_dirs: Vec::new(),
             managed_executable: managed.join("codex"),
-            executable_name: "codex".into(),
             expected_version: "1.0.0".into(),
             external_candidates: Vec::new(),
         };
@@ -1172,7 +1188,6 @@ mod tests {
             managed_bin: managed.clone(),
             approved_runtime_dirs: Vec::new(),
             managed_executable: managed.join("codex"),
-            executable_name: "codex".into(),
             expected_version: "1.0.0".into(),
             external_candidates: Vec::new(),
         };
@@ -1199,7 +1214,6 @@ mod tests {
             managed_bin: managed.clone(),
             approved_runtime_dirs: Vec::new(),
             managed_executable: managed.join("codex"),
-            executable_name: "codex".into(),
             expected_version: "1.0.0".into(),
             external_candidates: Vec::new(),
         };
