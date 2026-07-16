@@ -371,11 +371,9 @@ describe("AgentLifecyclePage characterization", () => {
     const installButtons = await screen.findAllByText("settings.toolInstall");
 
     fireEvent.click(installButtons[0]);
-    await screen.findByRole("checkbox");
     const listener = listenAllInstall.mock.calls[0][0] as (
       event: unknown,
     ) => Promise<void>;
-    fireEvent.click(screen.getByRole("checkbox"));
     const applyEvent = listener({
       type: "stage_changed",
       task_id: "install-1",
@@ -384,10 +382,9 @@ describe("AgentLifecyclePage characterization", () => {
     await waitFor(() =>
       expect(getInstallTask).toHaveBeenCalledWith("install-1"),
     );
-    fireEvent.click(screen.getByText("settings.installer.continue"));
+    fireEvent.click(screen.getByText("settings.installer.confirmAndContinue"));
     await waitFor(() => expect(startInstall).toHaveBeenCalledTimes(1));
     expect(screen.getByText("settings.installer.progress")).toBeInTheDocument();
-    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
     resolveTask({
       task_id: "install-1",
       request: { task_id: "install-1", tools: ["claude"], action: "install" },
@@ -400,7 +397,6 @@ describe("AgentLifecyclePage characterization", () => {
     await applyEvent;
 
     expect(startInstall).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
   });
 
   it("does not continue an update after unmount", async () => {
@@ -443,9 +439,9 @@ describe("AgentLifecyclePage characterization", () => {
     startInstall.mockReturnValue(start);
     const view = render(<AgentLifecyclePage />);
     fireEvent.click((await screen.findAllByText("settings.toolInstall"))[0]);
-    await screen.findByText("settings.installer.continue");
+    await screen.findByText("settings.installer.confirmAndContinue");
 
-    fireEvent.click(screen.getByText("settings.installer.continue"));
+    fireEvent.click(screen.getByText("settings.installer.confirmAndContinue"));
     await waitFor(() => expect(startInstall).toHaveBeenCalledOnce());
     view.unmount();
     rejectStart(new Error("start failed"));
@@ -476,7 +472,7 @@ describe("AgentLifecyclePage characterization", () => {
     });
     const view = render(<AgentLifecyclePage />);
     fireEvent.click((await screen.findAllByText("settings.toolInstall"))[0]);
-    fireEvent.click(await screen.findByText("settings.installer.continue"));
+    fireEvent.click(await screen.findByText("settings.installer.confirmAndContinue"));
     await waitFor(() => expect(startInstall).toHaveBeenCalledOnce());
     const listener = listenAllInstall.mock.calls[0][0] as (
       event: unknown,
@@ -741,5 +737,33 @@ describe("AgentLifecyclePage characterization", () => {
       "install",
       {},
     );
+  });
+
+  it("refreshes one stale confirmation into a no-confirmation progress flow", async () => {
+    prepareInstall
+      .mockResolvedValueOnce({
+        task_id: "stale-install",
+        requires_confirmation: true,
+        plan: { actions: [] },
+      })
+      .mockResolvedValueOnce({
+        task_id: "refreshed-install",
+        requires_confirmation: false,
+        plan: { actions: [] },
+      });
+    startInstall
+      .mockRejectedValueOnce(new Error("installer.state_changed"))
+      .mockResolvedValueOnce("refreshed-install");
+    render(<AgentLifecyclePage />);
+
+    fireEvent.click((await screen.findAllByText("settings.toolInstall"))[0]);
+    fireEvent.click(
+      await screen.findByText("settings.installer.confirmAndContinue"),
+    );
+
+    await waitFor(() => expect(prepareInstall).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(startInstall).toHaveBeenCalledTimes(2));
+    expect(screen.getByText("settings.installer.progress")).toBeInTheDocument();
+    expect(screen.queryByText("installer.state_changed")).not.toBeInTheDocument();
   });
 });

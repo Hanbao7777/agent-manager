@@ -141,6 +141,7 @@ fn action(
         requires_confirmation,
         requires_elevation,
         status: super::ActionStatus::Pending,
+        target_paths: Vec::new(),
     }
 }
 

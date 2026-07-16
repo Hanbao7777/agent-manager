@@ -140,8 +140,8 @@ pub fn classify_process_failure(
             (
                 InstallFailureCode::TlsFailure,
                 RecommendedAction::CheckNetwork,
-                true,
                 false,
+                true,
                 "installer.failure.tls_failure",
             )
         } else {
@@ -450,8 +450,8 @@ mod tests {
                 "self signed certificate in certificate chain",
                 InstallFailureCode::TlsFailure,
                 RecommendedAction::CheckNetwork,
-                true,
                 false,
+                true,
             ),
             (
                 InstallStage::InstallingTools,

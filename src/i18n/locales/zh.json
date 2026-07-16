@@ -72,6 +72,8 @@
       "resultHint": "查看每个工具的结果。",
       "administrator": "需要管理员权限",
       "continue": "继续",
+      "confirmAndContinue": "确认并继续",
+      "stateChanged": "安装条件已更改。继续前请查看更新后的计划。",
       "cancel": "取消安装",
       "close": "关闭",
       "installed": "已安装",
@@ -121,7 +123,8 @@
         "repair_node": "修复 Node.js",
         "refresh_environment": "刷新环境",
         "install_npm": "安装 npm",
-        "update_path": "更新 PATH"
+        "update_path": "更新 PATH",
+        "switch_to_managed_installation": "切换到受管理的安装"
       },
       "stage": {
         "preflight": "正在检查要求",

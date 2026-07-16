@@ -16,6 +16,7 @@ vi.mock("react-i18next", () => ({
       ({
         "settings.installer.administrator": "Administrator permission required",
         "settings.installer.continue": "Continue",
+        "settings.installer.confirmAndContinue": "Confirm and continue",
         "settings.installer.installed": "Installed",
         "settings.installer.failed": "Failed",
         "settings.installer.status.succeeded": "Installed",
@@ -69,7 +70,7 @@ const keyShape = (value: unknown): unknown => {
 };
 
 describe("ToolInstallDialog", () => {
-  it("requires confirmation for privileged repairs before continuing", () => {
+  it("uses one explicit confirmation action for privileged repairs", () => {
     const onConfirm = vi.fn();
 
     render(
@@ -87,10 +88,8 @@ describe("ToolInstallDialog", () => {
     expect(
       screen.getByText("Administrator permission required"),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
-
-    fireEvent.click(screen.getByRole("checkbox"));
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Confirm and continue" }));
 
     expect(onConfirm).toHaveBeenCalledWith(["install-node"]);
   });
@@ -130,8 +129,7 @@ describe("ToolInstallDialog", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("checkbox"));
-    const button = screen.getByRole("button", { name: "Continue" });
+    const button = screen.getByRole("button", { name: "Confirm and continue" });
     fireEvent.click(button);
     fireEvent.click(button);
 
@@ -227,7 +225,7 @@ describe("ToolInstallDialog", () => {
     expect(screen.getByText("Gemini CLI")).toBeInTheDocument();
     expect(screen.getByText("Installed")).toBeInTheDocument();
     expect(screen.getAllByText("Failed")).toHaveLength(1);
-    expect(screen.getByText("redacted diagnostic")).toBeInTheDocument();
+    expect(screen.queryByText("redacted diagnostic")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(onRetry).toHaveBeenCalledOnce();
@@ -353,8 +351,7 @@ describe("ToolInstallDialog", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("checkbox"));
-    expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Confirm and continue" })).toBeEnabled();
 
     rerender(
       <ToolInstallDialog
@@ -377,7 +374,7 @@ describe("ToolInstallDialog", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Confirm and continue" })).toBeEnabled();
   });
 
   it("renders a task-level failure when no tool result exists", () => {
@@ -413,9 +410,7 @@ describe("ToolInstallDialog", () => {
       />,
     );
 
-    expect(
-      screen.getByText("interrupted before installing tools"),
-    ).toBeInTheDocument();
+    expect(screen.queryByText("interrupted before installing tools")).not.toBeInTheDocument();
   });
 
   it("shows diagnostics and retries a retryable task failure", () => {

@@ -59,14 +59,6 @@ function FailureDetails({
   return (
     <div className="mt-1 text-xs text-muted-foreground">
       <p>{t(`settings.installer.failure.${failure.code}`)}</p>
-      {failure.detail && (
-        <>
-          <p className="mt-1 font-medium">
-            {t("settings.installer.diagnostics")}
-          </p>
-          <p>{failure.detail}</p>
-        </>
-      )}
     </div>
   );
 }
@@ -82,7 +74,6 @@ export function ToolInstallDialog({
   onRetry,
 }: ToolInstallDialogProps) {
   const { t } = useTranslation();
-  const [approved, setApproved] = useState<string[]>([]);
   const [confirming, setConfirming] = useState(false);
   const confirmationInFlight = useRef(false);
   const actions = preparation?.plan.actions ?? task?.plan.actions ?? [];
@@ -94,24 +85,13 @@ export function ToolInstallDialog({
   const canRetry =
     result?.failure?.retryable ||
     result?.tools.some((tool) => tool.failure?.retryable);
-  const canContinue =
-    !preparation?.requires_confirmation ||
-    required.every((action) => approved.includes(action.id));
   const blocksDismissal = Boolean(preparation || isProgress);
   const canCancelProgress = task?.stage !== "repairing";
 
   useEffect(() => {
-    setApproved([]);
     setConfirming(false);
     confirmationInFlight.current = false;
   }, [open, preparation?.task_id, task?.task_id]);
-
-  const toggle = (id: string) =>
-    setApproved((current) =>
-      current.includes(id)
-        ? current.filter((currentId) => currentId !== id)
-        : [...current, id],
-    );
 
   const confirm = async () => {
     if (confirmationInFlight.current) return;
@@ -191,19 +171,11 @@ export function ToolInstallDialog({
         ) : (
           <div className="space-y-2">
             {actions.map((action) => (
-              <label
+              <div
                 key={action.id}
                 className="flex gap-2 rounded border p-3 text-sm"
               >
-                {action.requires_confirmation || action.requires_elevation ? (
-                  <input
-                    type="checkbox"
-                    checked={approved.includes(action.id)}
-                    onChange={() => toggle(action.id)}
-                  />
-                ) : (
-                  <CheckCircle2 className="h-4 w-4 text-green-600" />
-                )}
+                <CheckCircle2 className="h-4 w-4 shrink-0 text-green-600" />
                 <span>
                   {actionLabel(action, t)}
                   {action.requires_elevation && (
@@ -211,8 +183,13 @@ export function ToolInstallDialog({
                       {t("settings.installer.administrator")}
                     </span>
                   )}
+                  {(action.target_paths?.length ?? 0) > 0 && (
+                    <span className="mt-1 block break-all font-mono text-xs text-muted-foreground">
+                      {action.target_paths!.join("\n")}
+                    </span>
+                  )}
                 </span>
-              </label>
+              </div>
             ))}
           </div>
         )}
@@ -240,10 +217,10 @@ export function ToolInstallDialog({
                 {t("common.cancel")}
               </Button>
               <Button
-                disabled={!canContinue || confirming}
+                disabled={confirming}
                 onClick={() => void confirm()}
               >
-                {t("settings.installer.continue")}
+                {t("settings.installer.confirmAndContinue")}
               </Button>
             </>
           )}

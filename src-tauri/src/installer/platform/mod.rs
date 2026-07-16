@@ -1,3 +1,5 @@
+use std::future::Future;
+use std::time::Duration;
 use std::{
     error::Error as _,
     fs,
@@ -153,16 +155,45 @@ fn version_key(version: &str) -> (u64, u64, u64) {
 }
 
 pub async fn fetch_node_index() -> Result<String, InstallFailure> {
-    crate::proxy::http_client::get()
-        .get(NODE_INDEX_URL)
-        .send()
-        .await
-        .map_err(network_failure)?
-        .error_for_status()
-        .map_err(network_failure)?
-        .text()
-        .await
-        .map_err(network_failure)
+    retry_transient_download(|| async {
+        crate::proxy::http_client::get()
+            .get(NODE_INDEX_URL)
+            .send()
+            .await
+            .map_err(network_failure)?
+            .error_for_status()
+            .map_err(network_failure)?
+            .text()
+            .await
+            .map_err(network_failure)
+    })
+    .await
+}
+
+async fn retry_transient_download<T, F, Fut>(mut operation: F) -> Result<T, InstallFailure>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, InstallFailure>>,
+{
+    for attempt in 0..3 {
+        match operation().await {
+            Ok(value) => return Ok(value),
+            Err(error) if attempt < 2 && is_transient_download_failure(&error) => {
+                tokio::time::sleep(Duration::from_millis(100 * (attempt + 1))).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("the retry loop always returns")
+}
+
+fn is_transient_download_failure(error: &InstallFailure) -> bool {
+    matches!(
+        error.code,
+        InstallFailureCode::DnsFailure
+            | InstallFailureCode::NetworkTimeout
+            | InstallFailureCode::ProxyUnreachable
+    )
 }
 
 pub async fn download_and_verify_node(
@@ -172,42 +203,48 @@ pub async fn download_and_verify_node(
     fs::create_dir_all(task_temp)
         .map_err(|error| failure(InstallFailureCode::PermissionDenied, &error.to_string()))?;
     let client = crate::proxy::http_client::get();
-    let checksum_text = client
-        .get(&release.checksums_url)
-        .send()
-        .await
-        .map_err(network_failure)?
-        .error_for_status()
-        .map_err(|error| {
-            failure(
-                InstallFailureCode::DownloadIntegrityFailure,
-                &error.to_string(),
-            )
-        })?
-        .text()
-        .await
-        .map_err(network_failure)?;
+    let checksum_text = retry_transient_download(|| async {
+        client
+            .get(&release.checksums_url)
+            .send()
+            .await
+            .map_err(network_failure)?
+            .error_for_status()
+            .map_err(|error| {
+                failure(
+                    InstallFailureCode::DownloadIntegrityFailure,
+                    &error.to_string(),
+                )
+            })?
+            .text()
+            .await
+            .map_err(network_failure)
+    })
+    .await?;
     let expected = checksum_for_asset(&checksum_text, &release.asset_name).ok_or_else(|| {
         failure(
             InstallFailureCode::DownloadIntegrityFailure,
             "checksum entry missing",
         )
     })?;
-    let bytes = client
-        .get(&release.download_url)
-        .send()
-        .await
-        .map_err(network_failure)?
-        .error_for_status()
-        .map_err(|error| {
-            failure(
-                InstallFailureCode::DownloadIntegrityFailure,
-                &error.to_string(),
-            )
-        })?
-        .bytes()
-        .await
-        .map_err(network_failure)?;
+    let bytes = retry_transient_download(|| async {
+        client
+            .get(&release.download_url)
+            .send()
+            .await
+            .map_err(network_failure)?
+            .error_for_status()
+            .map_err(|error| {
+                failure(
+                    InstallFailureCode::DownloadIntegrityFailure,
+                    &error.to_string(),
+                )
+            })?
+            .bytes()
+            .await
+            .map_err(network_failure)
+    })
+    .await?;
     if let Err(error) = verify_sha256(&bytes, &expected) {
         let _ = fs::remove_dir_all(task_temp);
         return Err(error);
@@ -353,8 +390,8 @@ fn network_failure(error: reqwest::Error) -> InstallFailure {
             code: InstallFailureCode::InstallerFailure,
             stage: InstallStage::Repairing,
             exit_code: None,
-            retryable: true,
-            requires_user_action: false,
+            retryable: false,
+            requires_user_action: true,
             message_key: "installer.failure.repairing".into(),
             recommended_action: RecommendedAction::CheckNetwork,
             detail: Some(crate::installer::redact_diagnostic(&detail)),
@@ -579,5 +616,61 @@ mod tests {
         fs::write(guard.path().join("cancelled-artifact"), b"temporary").unwrap();
         drop(guard);
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn only_network_dns_timeout_and_proxy_failures_are_download_retryable() {
+        for code in [
+            InstallFailureCode::DnsFailure,
+            InstallFailureCode::NetworkTimeout,
+            InstallFailureCode::ProxyUnreachable,
+        ] {
+            assert!(is_transient_download_failure(&failure(code, "transient")));
+        }
+        for code in [
+            InstallFailureCode::TlsFailure,
+            InstallFailureCode::DownloadIntegrityFailure,
+            InstallFailureCode::SignatureVerificationFailure,
+            InstallFailureCode::PrivilegeDeclined,
+            InstallFailureCode::InstallerFailure,
+        ] {
+            assert!(!is_transient_download_failure(&failure(code, "terminal")));
+        }
+    }
+
+    #[test]
+    fn transient_download_retry_stops_after_three_total_attempts() {
+        let attempts = std::sync::atomic::AtomicUsize::new(0);
+        let result = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(retry_transient_download(|| {
+                attempts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                async { Err::<(), _>(failure(InstallFailureCode::DnsFailure, "offline")) }
+            }));
+
+        assert_eq!(result.unwrap_err().code, InstallFailureCode::DnsFailure);
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn integrity_failure_does_not_retry_download() {
+        let attempts = std::sync::atomic::AtomicUsize::new(0);
+        let result = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(retry_transient_download(|| {
+                attempts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                async {
+                    Err::<(), _>(failure(
+                        InstallFailureCode::DownloadIntegrityFailure,
+                        "checksum mismatch",
+                    ))
+                }
+            }));
+
+        assert_eq!(
+            result.unwrap_err().code,
+            InstallFailureCode::DownloadIntegrityFailure
+        );
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::Relaxed), 1);
     }
 }

@@ -72,6 +72,8 @@
       "resultHint": "各ツールの結果を確認してください。",
       "administrator": "管理者権限が必要です",
       "continue": "続行",
+      "confirmAndContinue": "確認して続行",
+      "stateChanged": "インストール条件が変更されました。続行する前に更新された計画を確認してください。",
       "cancel": "インストールを中止",
       "close": "閉じる",
       "installed": "インストール済み",
@@ -121,7 +123,8 @@
         "repair_node": "Node.js を修復",
         "refresh_environment": "環境を更新",
         "install_npm": "npm をインストール",
-        "update_path": "PATH を更新"
+        "update_path": "PATH を更新",
+        "switch_to_managed_installation": "管理対象のインストールに切り替え"
       },
       "stage": {
         "preflight": "要件を確認中",

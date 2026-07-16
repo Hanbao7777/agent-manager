@@ -28,6 +28,7 @@ export type RepairActionKind =
   | "repair_node"
   | "refresh_environment"
   | "install_npm"
+  | "switch_to_managed_installation"
   | "update_path";
 export type ToolInstallStatus =
   | "succeeded"
@@ -89,6 +90,7 @@ export interface RepairAction {
   requires_confirmation: boolean;
   requires_elevation: boolean;
   status: ActionStatus;
+  target_paths?: string[];
 }
 export interface RepairPlan {
   actions: RepairAction[];

@@ -74,7 +74,7 @@ pub fn start_tool_install(
         .ok_or_else(|| "missing task id".to_string())?;
     store
         .claim_start(&request)
-        .map_err(|error| error.detail.unwrap_or_else(|| error.message_key))?;
+        .map_err(|error| error.message_key)?;
     let task_store = store.inner().clone();
     let emitted_task_id = task_id.clone();
     std::thread::spawn(move || {

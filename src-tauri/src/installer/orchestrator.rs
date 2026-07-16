@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, RwLock,
+        Arc, Mutex, RwLock,
     },
 };
 
@@ -34,6 +34,7 @@ pub struct InstallTaskStore {
     tasks: Arc<RwLock<HashMap<String, InstallTaskSnapshot>>>,
     cancellations: Arc<RwLock<HashMap<String, Arc<AtomicBool>>>>,
     claims: Arc<RwLock<HashSet<String>>>,
+    preparation_lock: Arc<Mutex<()>>,
     startup_recovery_events: Arc<RwLock<Vec<super::InstallTaskEvent>>>,
     persistence_path: Option<Arc<PathBuf>>,
     next_task_id: Arc<AtomicU64>,
@@ -46,6 +47,7 @@ impl Default for InstallTaskStore {
             tasks: Arc::default(),
             cancellations: Arc::default(),
             claims: Arc::default(),
+            preparation_lock: Arc::default(),
             startup_recovery_events: Arc::default(),
             persistence_path: None,
             next_task_id: Arc::new(AtomicU64::new(1)),
@@ -88,6 +90,7 @@ impl InstallTaskStore {
             tasks: Arc::new(RwLock::new(tasks)),
             cancellations: Arc::default(),
             claims: Arc::default(),
+            preparation_lock: Arc::default(),
             startup_recovery_events: Arc::new(RwLock::new(startup_recovery_events)),
             persistence_path: Some(Arc::new(path)),
             next_task_id: Arc::new(AtomicU64::new(next_task_id)),
@@ -145,7 +148,25 @@ impl InstallTaskStore {
         mut request: InstallRequest,
         runtime: &R,
     ) -> Result<InstallPreparation, InstallFailure> {
-        let mut plan = build_repair_plan(&runtime.snapshot()?, &node_policy())?;
+        let _preparation_lock = self.preparation_lock.lock().expect("task store poisoned");
+        if self.active_task().is_some() {
+            return Err(failure(
+                InstallFailureCode::InstallerFailure,
+                "another installation task is already active",
+            ));
+        }
+        let snapshot = runtime.snapshot()?;
+        let mut plan = build_repair_plan(&snapshot, &node_policy())?;
+        let target_paths = [
+            snapshot.managed_install_directory_access.path,
+            snapshot.managed_cache_directory_access.path,
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        for action in &mut plan.actions {
+            action.target_paths = target_paths.clone();
+        }
         let mut switch_tools = HashSet::new();
         for tool in request.tools.iter().copied() {
             if switch_tools.insert(tool) && runtime.managed_switch_required(tool)? {
@@ -155,6 +176,7 @@ impl InstallTaskStore {
                     requires_confirmation: true,
                     requires_elevation: false,
                     status: super::ActionStatus::Pending,
+                    target_paths: target_paths.clone(),
                 });
             }
         }
@@ -227,18 +249,17 @@ impl InstallTaskStore {
             .task_id
             .clone()
             .ok_or_else(|| failure(InstallFailureCode::PrivilegeDeclined, "missing task id"))?;
-        let task = self
-            .get(&task_id)
-            .ok_or_else(|| failure(InstallFailureCode::InstallerFailure, "unknown task"))?;
-        validate_confirmed_request(&task, &confirmed.request)?;
-        if !matches!(
-            task.stage,
-            InstallStage::Preflight | InstallStage::AwaitingConfirmation
-        ) {
-            return Err(failure(
-                InstallFailureCode::InstallerFailure,
-                "task has already started or completed",
-            ));
+        let Some(task) = self.get(&task_id) else {
+            return Err(stale_confirmation_failure());
+        };
+        if validate_confirmed_request(&task, &confirmed.request).is_err()
+            || !matches!(
+                task.stage,
+                InstallStage::Preflight | InstallStage::AwaitingConfirmation
+            )
+        {
+            self.discard(task_id.as_str());
+            return Err(stale_confirmation_failure());
         }
         if task
             .plan
@@ -273,6 +294,19 @@ impl InstallTaskStore {
         }
     }
 
+    /// Discard an untrusted preparation and every volatile handle attached to it.
+    /// A stale confirmation must never retain the global active-task reservation.
+    pub fn discard(&self, task_id: &str) {
+        if let Ok(mut tasks) = self.tasks.write() {
+            tasks.remove(task_id);
+        }
+        self.release_claim(task_id);
+        if let Ok(mut cancellations) = self.cancellations.write() {
+            cancellations.remove(task_id);
+        }
+        self.persist();
+    }
+
     pub fn fail_background(
         &self,
         task_id: &str,
@@ -289,6 +323,7 @@ impl InstallTaskStore {
         let result = task.result.clone();
         drop(tasks);
         self.persist();
+        self.release_lifecycle_state(task_id);
         result
     }
 
@@ -588,6 +623,27 @@ impl InstallTaskStore {
         for event in terminal_events(&task) {
             emit(event);
         }
+        self.release_lifecycle_state(task_id);
+    }
+
+    fn release_lifecycle_state(&self, task_id: &str) {
+        self.release_claim(task_id);
+        if let Ok(mut cancellations) = self.cancellations.write() {
+            cancellations.remove(task_id);
+        }
+    }
+}
+
+fn stale_confirmation_failure() -> InstallFailure {
+    InstallFailure {
+        code: InstallFailureCode::InstallerFailure,
+        stage: InstallStage::AwaitingConfirmation,
+        exit_code: None,
+        retryable: false,
+        requires_user_action: true,
+        message_key: "installer.state_changed".into(),
+        recommended_action: RecommendedAction::Retry,
+        detail: None,
     }
 }
 
@@ -1302,6 +1358,7 @@ mod tests {
                 requires_confirmation: true,
                 requires_elevation: false,
                 status: super::super::ActionStatus::Pending,
+                target_paths: Vec::new(),
             }],
         };
 
@@ -1355,17 +1412,68 @@ mod tests {
                 .collect(),
         };
 
-        assert_eq!(
-            store.claim_start(&confirmed).unwrap_err().code,
-            InstallFailureCode::PrivilegeDeclined
+        let error = store.claim_start(&confirmed).unwrap_err();
+        assert_eq!(error.message_key, "installer.state_changed");
+        assert!(store.get("bound-request").is_none());
+        assert!(store.active_task().is_none());
+
+        let refreshed = store.prepare(
+            InstallRequest {
+                task_id: Some("refreshed-request".into()),
+                tools: vec![ToolId::Codex],
+                action: super::super::InstallAction::Install,
+            },
+            &Fake,
         );
+        assert!(refreshed.is_ok());
+    }
+
+    #[test]
+    fn only_one_non_terminal_task_can_be_prepared_globally() {
+        let store = InstallTaskStore::default();
+        store
+            .prepare(
+                InstallRequest {
+                    task_id: Some("first".into()),
+                    tools: vec![ToolId::Codex],
+                    action: super::super::InstallAction::Install,
+                },
+                &Fake,
+            )
+            .unwrap();
+
         assert_eq!(
             store
-                .start_with_events(confirmed, &Fake, |_| {})
+                .prepare(
+                    InstallRequest {
+                        task_id: Some("second".into()),
+                        tools: vec![ToolId::Claude],
+                        action: super::super::InstallAction::Install,
+                    },
+                    &Fake,
+                )
                 .unwrap_err()
                 .code,
-            InstallFailureCode::PrivilegeDeclined
+            InstallFailureCode::InstallerFailure
         );
+    }
+
+    #[test]
+    fn unknown_confirmation_is_publicly_stale_without_reserving_a_task() {
+        let store = InstallTaskStore::default();
+        let error = store
+            .claim_start(&ConfirmedInstallRequest {
+                request: InstallRequest {
+                    task_id: Some("missing".into()),
+                    tools: vec![ToolId::Codex],
+                    action: super::super::InstallAction::Install,
+                },
+                confirmed_action_ids: Vec::new(),
+            })
+            .unwrap_err();
+
+        assert_eq!(error.message_key, "installer.state_changed");
+        assert!(store.active_task().is_none());
     }
 
     #[test]

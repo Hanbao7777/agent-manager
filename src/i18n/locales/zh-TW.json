@@ -42,6 +42,8 @@
       "resultHint": "查看每個工具的結果。",
       "administrator": "需要管理員權限",
       "continue": "繼續",
+      "confirmAndContinue": "確認並繼續",
+      "stateChanged": "安裝條件已變更。繼續前請檢查更新後的計畫。",
       "cancel": "取消安裝",
       "close": "關閉",
       "installed": "已安裝",
@@ -91,7 +93,8 @@
         "repair_node": "修復 Node.js",
         "refresh_environment": "重新整理環境",
         "install_npm": "安裝 npm",
-        "update_path": "更新 PATH"
+        "update_path": "更新 PATH",
+        "switch_to_managed_installation": "切換至受管理的安裝"
       },
       "stage": {
         "preflight": "正在檢查需求",

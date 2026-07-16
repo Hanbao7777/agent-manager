@@ -250,6 +250,7 @@ export function AgentLifecyclePage() {
   const unlistenInstallEvents = useRef<(() => void) | null>(null);
   const unlistenExitBlocked = useRef<(() => void) | null>(null);
   const activeInstallTaskId = useRef<string | null>(null);
+  const staleRefreshUsed = useRef(false);
   const mounted = useRef(true);
 
   const toolVersionByName = useMemo(() => {
@@ -795,20 +796,36 @@ export function AgentLifecyclePage() {
             return;
           }
           try {
+            staleRefreshUsed.current = false;
             const preparation = await installerApi.prepare({
               task_id: null,
               tools: toolNames,
               action,
             });
             if (!mounted.current) return;
-            setInstallFlow({
-              visible: true,
-              preparation,
-              task: null,
-              tools: toolNames,
-            });
             activeInstallTaskId.current = preparation.task_id;
-            if (!preparation.requires_confirmation) {
+            if (preparation.requires_confirmation) {
+              setInstallFlow({
+                visible: true,
+                preparation,
+                task: null,
+                tools: toolNames,
+              });
+            } else {
+              setInstallFlow({
+                visible: true,
+                preparation: null,
+                task: {
+                  task_id: preparation.task_id,
+                  request: { task_id: preparation.task_id, tools: toolNames, action },
+                  stage: "installing_tools",
+                  plan: preparation.plan,
+                  result: null,
+                  cancellation_requested: false,
+                  interrupted: false,
+                },
+                tools: toolNames,
+              });
               if (!mounted.current) return;
               await installerApi.start({
                 request: {
@@ -826,7 +843,6 @@ export function AgentLifecyclePage() {
               error,
             );
             toast.error(t("settings.installer.failed"), {
-              description: extractErrorMessage(error) || undefined,
               closeButton: true,
             });
           }
@@ -910,10 +926,53 @@ export function AgentLifecyclePage() {
       } catch (error) {
         if (!mounted.current) return;
         console.error("[AboutSection] Failed to confirm native install", error);
-        toast.error(t("settings.installer.failed"), {
-          description: extractErrorMessage(error) || undefined,
-          closeButton: true,
-        });
+        if (extractErrorMessage(error) === "installer.state_changed") {
+          if (staleRefreshUsed.current) {
+            activeInstallTaskId.current = null;
+            setInstallFlow({ visible: false, preparation: null, task: null, tools: [] });
+            toast.error(t("settings.installer.stateChanged"), { closeButton: true });
+            return;
+          }
+          staleRefreshUsed.current = true;
+          try {
+            const refreshed = await installerApi.prepare({
+              task_id: null,
+              tools,
+              action: "install",
+            });
+            if (!mounted.current) return;
+            activeInstallTaskId.current = refreshed.task_id;
+            if (refreshed.requires_confirmation) {
+              setInstallFlow({ visible: true, preparation: refreshed, task: null, tools });
+            } else {
+              setInstallFlow({
+                visible: true,
+                preparation: null,
+                task: {
+                  task_id: refreshed.task_id,
+                  request: { task_id: refreshed.task_id, tools, action: "install" },
+                  stage: "installing_tools",
+                  plan: refreshed.plan,
+                  result: null,
+                  cancellation_requested: false,
+                  interrupted: false,
+                },
+                tools,
+              });
+              await installerApi.start({
+                request: { task_id: refreshed.task_id, tools, action: "install" },
+                confirmed_action_ids: [],
+              });
+            }
+          } catch (refreshError) {
+            console.error("[AboutSection] Failed to refresh install plan", refreshError);
+            activeInstallTaskId.current = null;
+            setInstallFlow({ visible: false, preparation: null, task: null, tools: [] });
+            toast.error(t("settings.installer.stateChanged"), { closeButton: true });
+          }
+          return;
+        }
+        toast.error(t("settings.installer.failed"), { closeButton: true });
       }
     },
     [installFlow, t],
@@ -925,6 +984,10 @@ export function AgentLifecyclePage() {
     if (!taskId) return;
     try {
       await installerApi.cancel(taskId);
+      if (installFlow.preparation) {
+        activeInstallTaskId.current = null;
+        setInstallFlow({ visible: false, preparation: null, task: null, tools: [] });
+      }
     } catch (error) {
       if (!mounted.current) return;
       console.error("[AboutSection] Failed to cancel native install", error);
@@ -943,6 +1006,8 @@ export function AgentLifecyclePage() {
       task: null,
       tools: [],
     });
+    activeInstallTaskId.current = null;
+    staleRefreshUsed.current = false;
     void handleRunToolAction(tools, "install");
   }, [handleRunToolAction, installFlow.tools]);
 

@@ -72,6 +72,8 @@
       "resultHint": "Review each tool result.",
       "administrator": "Administrator permission required",
       "continue": "Continue",
+      "confirmAndContinue": "Confirm and continue",
+      "stateChanged": "Installation conditions changed. Review the updated plan before continuing.",
       "cancel": "Cancel installation",
       "close": "Close",
       "installed": "Installed",
@@ -121,7 +123,8 @@
         "repair_node": "Repair Node.js",
         "refresh_environment": "Refresh environment",
         "install_npm": "Install npm",
-        "update_path": "Update PATH"
+        "update_path": "Update PATH",
+        "switch_to_managed_installation": "Switch to the managed installation"
       },
       "stage": {
         "preflight": "Checking requirements",

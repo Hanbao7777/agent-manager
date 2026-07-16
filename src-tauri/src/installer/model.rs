@@ -237,6 +237,8 @@ pub struct RepairAction {
     pub requires_confirmation: bool,
     pub requires_elevation: bool,
     pub status: ActionStatus,
+    #[serde(default)]
+    pub target_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -514,6 +516,7 @@ mod tests {
             requires_confirmation: false,
             requires_elevation: true,
             status: ActionStatus::Pending,
+            target_paths: vec!["managed/npm".into()],
         };
 
         assert!(!action.requires_confirmation);
