@@ -216,10 +216,7 @@ export function ToolInstallDialog({
               <Button variant="outline" onClick={onCancel}>
                 {t("common.cancel")}
               </Button>
-              <Button
-                disabled={confirming}
-                onClick={() => void confirm()}
-              >
+              <Button disabled={confirming} onClick={() => void confirm()}>
                 {t("settings.installer.confirmAndContinue")}
               </Button>
             </>

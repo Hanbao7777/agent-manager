@@ -89,7 +89,9 @@ describe("ToolInstallDialog", () => {
       screen.getByText("Administrator permission required"),
     ).toBeInTheDocument();
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Confirm and continue" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Confirm and continue" }),
+    );
 
     expect(onConfirm).toHaveBeenCalledWith(["install-node"]);
   });
@@ -351,7 +353,9 @@ describe("ToolInstallDialog", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Confirm and continue" })).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Confirm and continue" }),
+    ).toBeEnabled();
 
     rerender(
       <ToolInstallDialog
@@ -374,7 +378,9 @@ describe("ToolInstallDialog", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Confirm and continue" })).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Confirm and continue" }),
+    ).toBeEnabled();
   });
 
   it("renders a task-level failure when no tool result exists", () => {
@@ -410,7 +416,9 @@ describe("ToolInstallDialog", () => {
       />,
     );
 
-    expect(screen.queryByText("interrupted before installing tools")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("interrupted before installing tools"),
+    ).not.toBeInTheDocument();
   });
 
   it("shows diagnostics and retries a retryable task failure", () => {

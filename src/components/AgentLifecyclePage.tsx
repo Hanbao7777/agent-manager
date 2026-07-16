@@ -876,7 +876,12 @@ export function AgentLifecyclePage() {
 
   function clearNativeInstallFlow() {
     activeInstallTaskId.current = null;
-    setInstallFlow({ visible: false, preparation: null, task: null, tools: [] });
+    setInstallFlow({
+      visible: false,
+      preparation: null,
+      task: null,
+      tools: [],
+    });
   }
 
   function showNativeInstallProgress(
@@ -918,7 +923,12 @@ export function AgentLifecyclePage() {
     const refreshed = outcome.preparation;
     activeInstallTaskId.current = refreshed.task_id;
     if (refreshed.requires_confirmation) {
-      setInstallFlow({ visible: true, preparation: refreshed, task: null, tools });
+      setInstallFlow({
+        visible: true,
+        preparation: refreshed,
+        task: null,
+        tools,
+      });
       return;
     }
     const resumed = await installerApi.start({
@@ -967,7 +977,12 @@ export function AgentLifecyclePage() {
       await installerApi.cancel(taskId);
       if (installFlow.preparation) {
         activeInstallTaskId.current = null;
-        setInstallFlow({ visible: false, preparation: null, task: null, tools: [] });
+        setInstallFlow({
+          visible: false,
+          preparation: null,
+          task: null,
+          tools: [],
+        });
       }
     } catch (error) {
       if (!mounted.current) return;
