@@ -775,6 +775,34 @@ describe("AgentLifecyclePage characterization", () => {
     expect(screen.queryByText("installer.state_changed")).not.toBeInTheDocument();
   });
 
+  it("starts a refreshed no-confirmation plan from the initial path", async () => {
+    startInstall
+      .mockResolvedValueOnce({
+        type: "refreshed",
+        preparation: {
+          task_id: "refreshed-install",
+          requires_confirmation: false,
+          plan: { actions: [] },
+          refresh_generation: 1,
+        },
+      })
+      .mockResolvedValueOnce({ type: "started", task_id: "refreshed-install" });
+    render(<AgentLifecyclePage />);
+
+    fireEvent.click((await screen.findAllByText("settings.toolInstall"))[0]);
+
+    await waitFor(() => expect(startInstall).toHaveBeenCalledTimes(2));
+    expect(startInstall.mock.calls[1][0]).toEqual({
+      request: {
+        task_id: "refreshed-install",
+        tools: ["claude"],
+        action: "install",
+      },
+      confirmed_action_ids: [],
+    });
+    expect(screen.getByText("settings.installer.progress")).toBeInTheDocument();
+  });
+
   it("clears busy state when an immediate no-confirmation start rejects", async () => {
     startInstall.mockRejectedValueOnce(new Error("start failed"));
     render(<AgentLifecyclePage />);

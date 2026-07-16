@@ -343,10 +343,6 @@ impl InstallTaskStore {
                     self.discard(stale_task_id);
                     return Ok(StartInstallOutcome::StateChanged);
                 }
-                self.refresh_generations
-                    .write()
-                    .expect("task store poisoned")
-                    .insert(stale_task_id.into(), 1);
                 let preparation = self.prepare_with_generation(
                     InstallRequest {
                         task_id: None,
@@ -356,6 +352,10 @@ impl InstallTaskStore {
                     runtime,
                     1,
                 )?;
+                self.refresh_generations
+                    .write()
+                    .expect("task store poisoned")
+                    .insert(stale_task_id.into(), 1);
                 Ok(StartInstallOutcome::Refreshed { preparation })
             }
             Err(error) => Err(error),
@@ -1640,6 +1640,47 @@ mod tests {
             StartInstallOutcome::StateChanged
         );
         assert!(store.active_task().is_none());
+    }
+
+    #[test]
+    fn failed_refresh_does_not_consume_the_stale_generation() {
+        struct FailsOnce(std::sync::atomic::AtomicUsize);
+        impl OrchestratorRuntime for FailsOnce {
+            fn snapshot(&self) -> Result<EnvironmentSnapshot, InstallFailure> {
+                if self.0.fetch_add(1, Ordering::Relaxed) == 0 {
+                    Err(failure(
+                        InstallFailureCode::InstallerFailure,
+                        "temporary preflight failure",
+                    ))
+                } else {
+                    Fake.snapshot()
+                }
+            }
+            fn repair(&self, _: &RepairPlan, _: &AtomicBool) -> Result<(), InstallFailure> {
+                Ok(())
+            }
+            fn install_tool(&self, tool: ToolId, _: bool) -> ToolInstallResult {
+                Fake.install_tool(tool, false)
+            }
+        }
+
+        let store = InstallTaskStore::default();
+        let request = ConfirmedInstallRequest {
+            request: InstallRequest {
+                task_id: Some("missing".into()),
+                tools: vec![ToolId::Codex],
+                action: super::super::InstallAction::Install,
+            },
+            confirmed_action_ids: Vec::new(),
+        };
+        let runtime = FailsOnce(std::sync::atomic::AtomicUsize::new(0));
+
+        assert!(store.claim_or_refresh(&request, &runtime).is_err());
+        assert!(store.active_task().is_none());
+        assert!(matches!(
+            store.claim_or_refresh(&request, &runtime).unwrap(),
+            StartInstallOutcome::Refreshed { .. }
+        ));
     }
 
     #[test]

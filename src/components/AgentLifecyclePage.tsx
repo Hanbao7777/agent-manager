@@ -24,6 +24,7 @@ import { toast } from "sonner";
 import { installerApi, settingsApi } from "@/lib/api";
 import type {
   InstallPreparation,
+  StartInstallOutcome,
   InstallTaskSnapshot,
 } from "@/lib/api/installer";
 import type {
@@ -810,20 +811,6 @@ export function AgentLifecyclePage() {
                 tools: toolNames,
               });
             } else {
-              setInstallFlow({
-                visible: true,
-                preparation: null,
-                task: {
-                  task_id: preparation.task_id,
-                  request: { task_id: preparation.task_id, tools: toolNames, action },
-                  stage: "installing_tools",
-                  plan: preparation.plan,
-                  result: null,
-                  cancellation_requested: false,
-                  interrupted: false,
-                },
-                tools: toolNames,
-              });
               if (!mounted.current) return;
               const outcome = await installerApi.start({
                 request: {
@@ -833,11 +820,7 @@ export function AgentLifecyclePage() {
                 },
                 confirmed_action_ids: [],
               });
-              if (outcome.type !== "started") {
-                activeInstallTaskId.current = null;
-                setInstallFlow({ visible: false, preparation: null, task: null, tools: [] });
-                toast.error(t("settings.installer.stateChanged"), { closeButton: true });
-              }
+              await consumeStartOutcome(outcome, toolNames, preparation);
             }
           } catch (error) {
             if (!mounted.current) return;
@@ -845,8 +828,7 @@ export function AgentLifecyclePage() {
               "[AboutSection] Failed to start native install",
               error,
             );
-            activeInstallTaskId.current = null;
-            setInstallFlow({ visible: false, preparation: null, task: null, tools: [] });
+            clearNativeInstallFlow();
             toast.error(t("settings.installer.failed"), {
               closeButton: true,
             });
@@ -892,6 +874,66 @@ export function AgentLifecyclePage() {
 
   const handleCancelUpgrade = useCallback(() => setPendingUpgrade(null), []);
 
+  function clearNativeInstallFlow() {
+    activeInstallTaskId.current = null;
+    setInstallFlow({ visible: false, preparation: null, task: null, tools: [] });
+  }
+
+  function showNativeInstallProgress(
+    preparation: InstallPreparation,
+    tools: ToolName[],
+  ) {
+    activeInstallTaskId.current = preparation.task_id;
+    setInstallFlow({
+      visible: true,
+      preparation: null,
+      task: {
+        task_id: preparation.task_id,
+        request: { task_id: preparation.task_id, tools, action: "install" },
+        stage: "installing_tools",
+        plan: preparation.plan,
+        result: null,
+        cancellation_requested: false,
+        interrupted: false,
+      },
+      tools,
+    });
+  }
+
+  async function consumeStartOutcome(
+    outcome: StartInstallOutcome,
+    tools: ToolName[],
+    preparation: InstallPreparation,
+  ) {
+    if (!mounted.current) return;
+    if (outcome.type === "started") {
+      showNativeInstallProgress(preparation, tools);
+      return;
+    }
+    if (outcome.type === "state_changed") {
+      clearNativeInstallFlow();
+      toast.error(t("settings.installer.stateChanged"), { closeButton: true });
+      return;
+    }
+    const refreshed = outcome.preparation;
+    activeInstallTaskId.current = refreshed.task_id;
+    if (refreshed.requires_confirmation) {
+      setInstallFlow({ visible: true, preparation: refreshed, task: null, tools });
+      return;
+    }
+    const resumed = await installerApi.start({
+      request: { task_id: refreshed.task_id, tools, action: "install" },
+      confirmed_action_ids: [],
+    });
+    if (!mounted.current) return;
+    if (resumed.type !== "started") {
+      clearNativeInstallFlow();
+      toast.error(t("settings.installer.stateChanged"), { closeButton: true });
+      return;
+    }
+    showNativeInstallProgress(refreshed, tools);
+  }
+
   const handleConfirmInstall = useCallback(
     async (actionIds: string[]) => {
       const preparation = installFlow.preparation;
@@ -906,77 +948,15 @@ export function AgentLifecyclePage() {
           },
           confirmed_action_ids: actionIds,
         });
-        if (!mounted.current) return;
-        if (outcome.type === "state_changed") {
-          activeInstallTaskId.current = null;
-          setInstallFlow({ visible: false, preparation: null, task: null, tools: [] });
-          toast.error(t("settings.installer.stateChanged"), { closeButton: true });
-          return;
-        }
-        if (outcome.type === "refreshed") {
-          const refreshed = outcome.preparation;
-          activeInstallTaskId.current = refreshed.task_id;
-          if (refreshed.requires_confirmation) {
-            setInstallFlow({ visible: true, preparation: refreshed, task: null, tools });
-            return;
-          }
-          const resumed = await installerApi.start({
-            request: { task_id: refreshed.task_id, tools, action: "install" },
-            confirmed_action_ids: [],
-          });
-          if (!mounted.current) return;
-          if (resumed.type !== "started") {
-            activeInstallTaskId.current = null;
-            setInstallFlow({ visible: false, preparation: null, task: null, tools: [] });
-            toast.error(t("settings.installer.stateChanged"), { closeButton: true });
-            return;
-          }
-          setInstallFlow({
-            visible: true,
-            preparation: null,
-            task: {
-              task_id: refreshed.task_id,
-              request: { task_id: refreshed.task_id, tools, action: "install" },
-              stage: "installing_tools",
-              plan: refreshed.plan,
-              result: null,
-              cancellation_requested: false,
-              interrupted: false,
-            },
-            tools,
-          });
-          return;
-        }
-        setInstallFlow((flow) => {
-          const task = mergeInstallTaskSnapshot(flow.task, {
-            task_id: preparation.task_id,
-            request: {
-              task_id: preparation.task_id,
-              tools,
-              action: "install",
-            },
-            stage: "repairing",
-            plan: preparation.plan,
-            result: null,
-            cancellation_requested: false,
-            interrupted: false,
-          });
-          return {
-            visible: true,
-            preparation: null,
-            task,
-            tools,
-          };
-        });
+        await consumeStartOutcome(outcome, tools, preparation);
       } catch (error) {
         if (!mounted.current) return;
         console.error("[AboutSection] Failed to confirm native install", error);
-        activeInstallTaskId.current = null;
-        setInstallFlow({ visible: false, preparation: null, task: null, tools: [] });
+        clearNativeInstallFlow();
         toast.error(t("settings.installer.failed"), { closeButton: true });
       }
     },
-    [installFlow, t],
+    [clearNativeInstallFlow, consumeStartOutcome, installFlow, t],
   );
 
   const handleCancelInstall = useCallback(async () => {
