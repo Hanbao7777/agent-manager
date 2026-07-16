@@ -845,7 +845,7 @@ impl OrchestratorRuntime for CommandRuntime {
         };
         let managed_bin = managed_root.join("bin");
         let approved_runtime_dirs = approved_runtime_directories(&pair);
-        let mut result =
+        let result =
             super::managed_npm::install_managed_npm_tool(super::managed_npm::ManagedNpmRequest {
                 tool: managed_tool,
                 platform: if cfg!(target_os = "windows") {
@@ -1018,7 +1018,7 @@ fn external_candidates(command_name: &str, managed_root: &Path) -> Vec<PathBuf> 
     let entries: Vec<PathBuf> =
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect();
     let managed_bin = managed_root.join("bin");
-    let mut candidates = Vec::new();
+    let mut candidates: Vec<PathBuf> = Vec::new();
     for entry in entries {
         for candidate in [
             entry.join(command_name),
