@@ -70,7 +70,7 @@ Every phase must be implemented as a bounded task. A Worker self-review is neces
 | 5 | Lifecycle and confirmation UX | Complete | Accepted through `8b061682`; Windows/macOS artifact-free CI passed |
 | 6 | Opt-in diagnostic reporting | Complete | Accepted through `39026a8b`; Windows/macOS artifact-free CI passed |
 | 7 | CI hardening and dual-platform gates | Complete | Accepted through `03f07021`; Windows, Apple Silicon, and Intel artifact-free CI passed |
-| 8 | Controlled acceptance and packaging | Not started | Small Windows Sandbox pass, beta evidence, one retained Windows package set, one macOS DMG, ZIPs preserved |
+| 8 | Controlled acceptance and packaging | In progress | Windows Sandbox clean-install gate passed; Apple Silicon beta and final macOS package retention remain |
 
 ## Phase details
 
@@ -187,6 +187,15 @@ Status: Complete; the coordinator directly reviewed both Worker commits, correct
 
 ### Phase 8 — Acceptance, storage, and release
 
+Status: In progress. The bounded Windows Sandbox clean-install gate passed on commit `df7e21aa`; stable release remains blocked on the locked real Apple Silicon beta requirement.
+
+Accepted Windows evidence:
+
+- Artifact-free Windows run `29499764899` and Apple Silicon run `29499771820` passed for `df7e21aa`.
+- Packaging run `29500323839` passed and produced the retained MSI plus portable ZIP. MSI SHA-256: `fa89eff2bf2a205cc64f5ab5fcf40c167e82285dbfbd78ea8d8d27cabff5b433`; ZIP SHA-256: `4ac0e24f18c24bb2de4ccd2fb4b36f7514eb637a13f9f7241454b131664be2a6`.
+- Guided Sandbox run `88ea30f0a8024106acbee0888928c5c6` passed the real confirmation, Node repair, managed Codex install, PATH persistence, and fresh-PowerShell execution gate. `guided-result.json` records Node `v24.18.0`, npm `11.16.0`, and `codex-cli 0.144.5`, all with exit code 0; the managed bin is first in user PATH.
+- Failure run `31040c1f4a1344d79c361973b6439f0e` exposed npm silently dropping Codex's platform package after a transient optional-dependency download failure. Commit `df7e21aa` makes the platform package explicit and hard, retries only DNS/timeout/proxy failures up to three attempts, and keeps TLS/integrity/signature failures terminal.
+
 Windows Sandbox runtime root:
 
 `D:\codex\ai-deploy-toolkit\test\windows-sandbox`
@@ -228,3 +237,4 @@ Packaging is allowed only after Phases 1–7 are accepted. Publishing a stable r
 | 2026-07-16 | 5 | `8b061682` | `29481429453` | `29481431389` | Accepted | Worker `012c2a82-b2e1-4d2a-96de-0bb286ddbf72` produced `9815d482`, `d5cb619a`, and `aea4c1eb`, integrated as `e8302eba`, `1f7cec55`, and `820dceed`; coordinator fixes `138a8422`, `b87bbd42`, and `8b061682`; formatting, frontend expectation, and Rust fixture failures were fixed before acceptance; final Windows 228 Rust tests, macOS 237 Rust tests, and 7 frontend test files on both; packaging skipped |
 | 2026-07-16 | 6 | `39026a8b` | `29484602699` | `29484604504` | Accepted | Worker `44bb589b-c314-4c75-8787-b2599c2e96d2` produced `89fd1de4`, `a0950823`, and follow-up `d27b37aa`, integrated as `8367fffd`, `45ef8b7d`, and `53ea0d4e`; coordinator fixes `9d3d386c` and `39026a8b`; initial macOS export tests correctly exposed `/var` as a symlinked ancestor and fixtures were canonicalized without weakening production policy; final Windows 237 Rust tests, macOS 246 Rust tests, and 9 frontend test files on both; packaging skipped |
 | 2026-07-16 | 7 | `03f07021` | `29487729698` | Apple Silicon `29487732265`; Intel `29487014508` | Accepted | Worker `7b3b3150-d5ad-4b8f-9cfd-63ce5253bbc3` produced `f8e9987c` and `0ee3e2ae`, integrated as `44f00d5d` and `64f468fb`; coordinator fix `03f07021`; first Intel run `29486833207` exposed the `1.95`/`1.95.0` rustup identity mismatch, so Windows `29486816720` and Apple Silicon `29486825231` were cancelled immediately before the focused fix; final Windows 237 Rust tests, both macOS architectures 246 Rust tests, and 9 frontend test files on all three; packaging and uploads skipped |
+| 2026-07-16 | 8 | `df7e21aa` | `29499764899`; package `29500323839` | Apple Silicon `29499771820` | Windows gate accepted; phase remains open | Guided Sandbox run `88ea30f0a8024106acbee0888928c5c6` passed Node/npm/Codex and fresh-shell PATH execution; MSI and portable ZIP hashes verified and ZIP preserved; real Apple Silicon beta remains required before stable release |
