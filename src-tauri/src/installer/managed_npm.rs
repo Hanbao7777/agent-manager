@@ -1436,7 +1436,7 @@ mod tests {
     #[test]
     fn successful_verification_atomically_activates_one_entry_point() {
         let root = TestDirectory::new("activation");
-        let entry = root.0.join("managed/bin/codex.cmd");
+        let entry = root.0.join("managed").join("bin").join("codex.cmd");
         std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
         std::fs::write(&entry, b"prior entry point").unwrap();
         let (result, _, _) = install(&root, "1.2.3", "1.2.3", true);
@@ -1485,22 +1485,26 @@ mod tests {
     #[test]
     fn retention_keeps_only_current_and_previous_active_versions() {
         let root = TestDirectory::new("retention");
-        let versions = root.0.join("managed/versions/codex");
+        let versions = root.0.join("managed").join("versions").join("codex");
         for version in ["0.9.0", "1.0.0", "1.1.0"] {
             std::fs::create_dir_all(versions.join(version)).unwrap();
         }
-        let entry = root.0.join("managed/bin/codex.cmd");
+        let entry = root.0.join("managed").join("bin").join("codex.cmd");
         std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
+        let previous_executable =
+            staged_executable(&versions.join("1.0.0"), "codex", &Platform::Windows);
         std::fs::write(
             &entry,
-            format!(
-                "@\"{}\" %*\r\n",
-                staged_executable(&versions.join("1.0.0"), "codex", &Platform::Windows).display()
-            ),
+            launcher_contents(&previous_executable, &Platform::Windows).unwrap(),
         )
         .unwrap();
         let (result, _, _) = install(&root, "2.0.0", "2.0.0", true);
-        assert_eq!(result.status, ToolInstallStatus::Succeeded);
+        assert_eq!(
+            result.status,
+            ToolInstallStatus::Succeeded,
+            "{:?}",
+            result.failure
+        );
         assert!(versions.join("2.0.0").is_dir());
         assert!(versions.join("1.0.0").is_dir());
         assert!(!versions.join("0.9.0").exists());
