@@ -137,7 +137,7 @@ describe("ToolInstallDialog", () => {
     expect(button).toBeDisabled();
   });
 
-  it("does not offer cancellation during the non-cancellable repair stage", () => {
+  it("offers cancellation while a repair download is in progress", () => {
     render(
       <ToolInstallDialog
         open
@@ -162,8 +162,8 @@ describe("ToolInstallDialog", () => {
     );
 
     expect(
-      screen.queryByRole("button", { name: "settings.installer.cancel" }),
-    ).not.toBeInTheDocument();
+      screen.getByRole("button", { name: "settings.installer.cancel" }),
+    ).toBeInTheDocument();
   });
 
   it("shows successful and failed tools in one batch result", () => {

@@ -66,17 +66,18 @@ pub fn start_tool_install(
     request: ConfirmedInstallRequest,
     store: tauri::State<'_, InstallTaskStore>,
     app: tauri::AppHandle,
-) -> Result<String, String> {
-    let task_id = request
-        .request
-        .task_id
-        .clone()
-        .ok_or_else(|| "missing task id".to_string())?;
-    store
-        .claim_start(&request)
+) -> Result<StartInstallOutcome, String> {
+    let outcome = store
+        .claim_or_refresh(&request, &CommandRuntime)
         .map_err(|error| error.message_key)?;
+    let StartInstallOutcome::Started {
+        task_id: claimed_task_id,
+    } = outcome
+    else {
+        return Ok(outcome);
+    };
     let task_store = store.inner().clone();
-    let emitted_task_id = task_id.clone();
+    let emitted_task_id = claimed_task_id.clone();
     std::thread::spawn(move || {
         let event_app = app.clone();
         let result = task_store.start_with_events(request, &CommandRuntime, move |event| {
@@ -102,7 +103,9 @@ pub fn start_tool_install(
             }
         }
     });
-    Ok(task_id)
+    Ok(StartInstallOutcome::Started {
+        task_id: claimed_task_id,
+    })
 }
 
 fn emit_stage(app: &tauri::AppHandle, task_id: &str, stage: InstallStage) {

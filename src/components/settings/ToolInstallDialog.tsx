@@ -86,7 +86,7 @@ export function ToolInstallDialog({
     result?.failure?.retryable ||
     result?.tools.some((tool) => tool.failure?.retryable);
   const blocksDismissal = Boolean(preparation || isProgress);
-  const canCancelProgress = task?.stage !== "repairing";
+  const canCancelProgress = task?.stage !== "completed";
 
   useEffect(() => {
     setConfirming(false);

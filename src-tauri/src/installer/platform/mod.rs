@@ -154,8 +154,10 @@ fn version_key(version: &str) -> (u64, u64, u64) {
     )
 }
 
-pub async fn fetch_node_index() -> Result<String, InstallFailure> {
-    retry_transient_download(|| async {
+pub async fn fetch_node_index(
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> Result<String, InstallFailure> {
+    retry_transient_download(cancelled, || async {
         crate::proxy::http_client::get()
             .get(NODE_INDEX_URL)
             .send()
@@ -170,21 +172,52 @@ pub async fn fetch_node_index() -> Result<String, InstallFailure> {
     .await
 }
 
-async fn retry_transient_download<T, F, Fut>(mut operation: F) -> Result<T, InstallFailure>
+async fn retry_transient_download<T, F, Fut>(
+    cancelled: &std::sync::atomic::AtomicBool,
+    mut operation: F,
+) -> Result<T, InstallFailure>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T, InstallFailure>>,
 {
     for attempt in 0..3 {
-        match operation().await {
+        if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(cancellation_failure());
+        }
+        match tokio::select! {
+            result = operation() => result,
+            _ = wait_for_cancellation(cancelled) => Err(cancellation_failure()),
+        } {
             Ok(value) => return Ok(value),
             Err(error) if attempt < 2 && is_transient_download_failure(&error) => {
-                tokio::time::sleep(Duration::from_millis(100 * (attempt + 1))).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_millis(100 * (attempt + 1))) => {}
+                    _ = wait_for_cancellation(cancelled) => return Err(cancellation_failure()),
+                }
             }
             Err(error) => return Err(error),
         }
     }
     unreachable!("the retry loop always returns")
+}
+
+async fn wait_for_cancellation(cancelled: &std::sync::atomic::AtomicBool) {
+    while !cancelled.load(std::sync::atomic::Ordering::Acquire) {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+fn cancellation_failure() -> InstallFailure {
+    InstallFailure {
+        code: InstallFailureCode::InstallerFailure,
+        stage: InstallStage::Repairing,
+        exit_code: None,
+        retryable: false,
+        requires_user_action: false,
+        message_key: "installer.cancelled".into(),
+        recommended_action: RecommendedAction::ViewDiagnostics,
+        detail: None,
+    }
 }
 
 fn is_transient_download_failure(error: &InstallFailure) -> bool {
@@ -199,11 +232,12 @@ fn is_transient_download_failure(error: &InstallFailure) -> bool {
 pub async fn download_and_verify_node(
     release: &NodeRelease,
     task_temp: &Path,
+    cancelled: &std::sync::atomic::AtomicBool,
 ) -> Result<PathBuf, InstallFailure> {
     fs::create_dir_all(task_temp)
         .map_err(|error| failure(InstallFailureCode::PermissionDenied, &error.to_string()))?;
     let client = crate::proxy::http_client::get();
-    let checksum_text = retry_transient_download(|| async {
+    let checksum_text = retry_transient_download(cancelled, || async {
         client
             .get(&release.checksums_url)
             .send()
@@ -227,7 +261,7 @@ pub async fn download_and_verify_node(
             "checksum entry missing",
         )
     })?;
-    let bytes = retry_transient_download(|| async {
+    let bytes = retry_transient_download(cancelled, || async {
         client
             .get(&release.download_url)
             .send()
@@ -259,13 +293,15 @@ pub async fn install_node_release(
     adapter: &dyn PlatformAdapter,
     release: &NodeRelease,
     task_temp: PathBuf,
+    cancelled: &std::sync::atomic::AtomicBool,
 ) -> Result<(), InstallFailure> {
     let temp = TaskTempGuard::new(task_temp)?;
-    continue_after_verified_download(
-        adapter,
-        download_and_verify_node(release, temp.path()).await,
-        install_node,
-    )
+    let package = download_and_verify_node(release, temp.path(), cancelled).await?;
+    if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+        return Err(cancellation_failure());
+    }
+    // Native MSI/PKG execution is deliberately non-interruptible once launched.
+    install_node(adapter, &package)
 }
 
 fn continue_after_verified_download<F>(
@@ -641,9 +677,10 @@ mod tests {
     #[test]
     fn transient_download_retry_stops_after_three_total_attempts() {
         let attempts = std::sync::atomic::AtomicUsize::new(0);
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
         let result = tokio::runtime::Runtime::new()
             .unwrap()
-            .block_on(retry_transient_download(|| {
+            .block_on(retry_transient_download(&cancelled, || {
                 attempts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 async { Err::<(), _>(failure(InstallFailureCode::DnsFailure, "offline")) }
             }));
@@ -655,9 +692,10 @@ mod tests {
     #[test]
     fn integrity_failure_does_not_retry_download() {
         let attempts = std::sync::atomic::AtomicUsize::new(0);
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
         let result = tokio::runtime::Runtime::new()
             .unwrap()
-            .block_on(retry_transient_download(|| {
+            .block_on(retry_transient_download(&cancelled, || {
                 attempts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 async {
                     Err::<(), _>(failure(
@@ -671,6 +709,26 @@ mod tests {
             result.unwrap_err().code,
             InstallFailureCode::DownloadIntegrityFailure
         );
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn cancellation_interrupts_retry_backoff() {
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let trigger = cancelled.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(10));
+            trigger.store(true, std::sync::atomic::Ordering::Release);
+        });
+        let attempts = std::sync::atomic::AtomicUsize::new(0);
+        let result = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(retry_transient_download(cancelled.as_ref(), || {
+                attempts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                async { Err::<(), _>(failure(InstallFailureCode::NetworkTimeout, "offline")) }
+            }));
+
+        assert_eq!(result.unwrap_err().message_key, "installer.cancelled");
         assert_eq!(attempts.load(std::sync::atomic::Ordering::Relaxed), 1);
     }
 }

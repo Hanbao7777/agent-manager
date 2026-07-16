@@ -120,6 +120,16 @@ pub struct InstallPreparation {
     pub task_id: String,
     pub plan: RepairPlan,
     pub requires_confirmation: bool,
+    #[serde(default)]
+    pub refresh_generation: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum StartInstallOutcome {
+    Started { task_id: String },
+    Refreshed { preparation: InstallPreparation },
+    StateChanged,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

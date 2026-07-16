@@ -134,7 +134,7 @@ describe("AgentLifecyclePage characterization", () => {
       requires_confirmation: false,
       plan: { actions: [] },
     });
-    startInstall.mockResolvedValue("install-1");
+    startInstall.mockResolvedValue({ type: "started", task_id: "install-1" });
   });
 
   it("loads all six tools through the existing version API", async () => {
@@ -752,8 +752,16 @@ describe("AgentLifecyclePage characterization", () => {
         plan: { actions: [] },
       });
     startInstall
-      .mockRejectedValueOnce(new Error("installer.state_changed"))
-      .mockResolvedValueOnce("refreshed-install");
+      .mockResolvedValueOnce({
+        type: "refreshed",
+        preparation: {
+          task_id: "refreshed-install",
+          requires_confirmation: false,
+          plan: { actions: [] },
+          refresh_generation: 1,
+        },
+      })
+      .mockResolvedValueOnce({ type: "started", task_id: "refreshed-install" });
     render(<AgentLifecyclePage />);
 
     fireEvent.click((await screen.findAllByText("settings.toolInstall"))[0]);
@@ -761,9 +769,43 @@ describe("AgentLifecyclePage characterization", () => {
       await screen.findByText("settings.installer.confirmAndContinue"),
     );
 
-    await waitFor(() => expect(prepareInstall).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(prepareInstall).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(startInstall).toHaveBeenCalledTimes(2));
     expect(screen.getByText("settings.installer.progress")).toBeInTheDocument();
     expect(screen.queryByText("installer.state_changed")).not.toBeInTheDocument();
+  });
+
+  it("clears busy state when an immediate no-confirmation start rejects", async () => {
+    startInstall.mockRejectedValueOnce(new Error("start failed"));
+    render(<AgentLifecyclePage />);
+
+    fireEvent.click((await screen.findAllByText("settings.toolInstall"))[0]);
+
+    await waitFor(() => expect(toastError).toHaveBeenCalled());
+    expect(screen.getByText("settings.toolDiagnose")).not.toBeDisabled();
+  });
+
+  it("clears the flow after the backend rejects a second stale confirmation", async () => {
+    prepareInstall.mockResolvedValueOnce({
+      task_id: "refreshed-install",
+      requires_confirmation: true,
+      plan: { actions: [] },
+      refresh_generation: 1,
+    });
+    startInstall.mockResolvedValueOnce({ type: "state_changed" });
+    render(<AgentLifecyclePage />);
+
+    fireEvent.click((await screen.findAllByText("settings.toolInstall"))[0]);
+    fireEvent.click(
+      await screen.findByText("settings.installer.confirmAndContinue"),
+    );
+
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith(
+        "settings.installer.stateChanged",
+        expect.anything(),
+      ),
+    );
+    expect(screen.getByText("settings.toolDiagnose")).not.toBeDisabled();
   });
 });

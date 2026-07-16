@@ -99,7 +99,12 @@ export interface InstallPreparation {
   task_id: string;
   plan: RepairPlan;
   requires_confirmation: boolean;
+  refresh_generation?: number;
 }
+export type StartInstallOutcome =
+  | { type: "started"; task_id: string }
+  | { type: "refreshed"; preparation: InstallPreparation }
+  | { type: "state_changed" };
 export interface InstallFailure {
   code: InstallFailureCode;
   stage: InstallStage;
@@ -148,7 +153,7 @@ export const installerApi = {
   prepare: (request: InstallRequest) =>
     invoke<InstallPreparation>("prepare_tool_install", { request }),
   start: (request: ConfirmedInstallRequest) =>
-    invoke<string>("start_tool_install", { request }),
+    invoke<StartInstallOutcome>("start_tool_install", { request }),
   getTask: (taskId: string) =>
     invoke<InstallTaskSnapshot>("get_install_task", { taskId }),
   getActiveTask: () =>

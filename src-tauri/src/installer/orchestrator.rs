@@ -12,7 +12,8 @@ use super::{
     unique_temporary_path, AggregatedTaskStatus, ConfirmedInstallRequest, EnvironmentSnapshot,
     InstallFailure, InstallFailureCode, InstallPreparation, InstallRequest, InstallStage,
     InstallTaskResult, InstallTaskSnapshot, InstallTaskStatus, PairSource, RecommendedAction,
-    RepairPlan, ResolvedNodeNpmPair, ToolId, ToolInstallResult, ToolInstallStatus, ToolOutcome,
+    RepairPlan, ResolvedNodeNpmPair, StartInstallOutcome, ToolId, ToolInstallResult,
+    ToolInstallStatus, ToolOutcome,
 };
 
 use std::{
@@ -22,7 +23,7 @@ use std::{
 
 pub trait OrchestratorRuntime: Send + Sync {
     fn snapshot(&self) -> Result<EnvironmentSnapshot, InstallFailure>;
-    fn repair(&self, _plan: &RepairPlan) -> Result<(), InstallFailure>;
+    fn repair(&self, _plan: &RepairPlan, _cancelled: &AtomicBool) -> Result<(), InstallFailure>;
     fn managed_switch_required(&self, _tool: ToolId) -> Result<bool, InstallFailure> {
         Ok(false)
     }
@@ -34,6 +35,7 @@ pub struct InstallTaskStore {
     tasks: Arc<RwLock<HashMap<String, InstallTaskSnapshot>>>,
     cancellations: Arc<RwLock<HashMap<String, Arc<AtomicBool>>>>,
     claims: Arc<RwLock<HashSet<String>>>,
+    refresh_generations: Arc<RwLock<HashMap<String, u8>>>,
     preparation_lock: Arc<Mutex<()>>,
     startup_recovery_events: Arc<RwLock<Vec<super::InstallTaskEvent>>>,
     persistence_path: Option<Arc<PathBuf>>,
@@ -47,6 +49,7 @@ impl Default for InstallTaskStore {
             tasks: Arc::default(),
             cancellations: Arc::default(),
             claims: Arc::default(),
+            refresh_generations: Arc::default(),
             preparation_lock: Arc::default(),
             startup_recovery_events: Arc::default(),
             persistence_path: None,
@@ -90,6 +93,7 @@ impl InstallTaskStore {
             tasks: Arc::new(RwLock::new(tasks)),
             cancellations: Arc::default(),
             claims: Arc::default(),
+            refresh_generations: Arc::default(),
             preparation_lock: Arc::default(),
             startup_recovery_events: Arc::new(RwLock::new(startup_recovery_events)),
             persistence_path: Some(Arc::new(path)),
@@ -147,6 +151,15 @@ impl InstallTaskStore {
         &self,
         mut request: InstallRequest,
         runtime: &R,
+    ) -> Result<InstallPreparation, InstallFailure> {
+        self.prepare_with_generation(request, runtime, 0)
+    }
+
+    fn prepare_with_generation<R: OrchestratorRuntime>(
+        &self,
+        mut request: InstallRequest,
+        runtime: &R,
+        refresh_generation: u8,
     ) -> Result<InstallPreparation, InstallFailure> {
         let _preparation_lock = self.preparation_lock.lock().expect("task store poisoned");
         if self.active_task().is_some() {
@@ -223,10 +236,17 @@ impl InstallTaskStore {
             .insert(task_id.clone(), Arc::new(AtomicBool::new(false)));
         drop(tasks);
         self.persist();
+        if refresh_generation > 0 {
+            self.refresh_generations
+                .write()
+                .expect("task store poisoned")
+                .insert(task_id.clone(), refresh_generation);
+        }
         Ok(InstallPreparation {
             task_id,
             plan,
             requires_confirmation,
+            refresh_generation,
         })
     }
 
@@ -286,6 +306,60 @@ impl InstallTaskStore {
             ));
         }
         Ok(task_id)
+    }
+
+    pub fn claim_or_refresh<R: OrchestratorRuntime>(
+        &self,
+        confirmed: &ConfirmedInstallRequest,
+        runtime: &R,
+    ) -> Result<StartInstallOutcome, InstallFailure> {
+        match self.claim_start(confirmed) {
+            Ok(task_id) => Ok(StartInstallOutcome::Started { task_id }),
+            Err(error) if error.message_key == "installer.state_changed" => {
+                let stale_task_id = confirmed
+                    .request
+                    .task_id
+                    .as_deref()
+                    .ok_or_else(|| error.clone())?;
+                let generation = self
+                    .refresh_generations
+                    .read()
+                    .expect("task store poisoned")
+                    .get(stale_task_id)
+                    .copied()
+                    .unwrap_or(0);
+                if generation > 0 {
+                    if let Some(active) = self.active_task() {
+                        if self
+                            .refresh_generations
+                            .read()
+                            .expect("task store poisoned")
+                            .get(&active.task_id)
+                            .is_some()
+                        {
+                            self.discard(&active.task_id);
+                        }
+                    }
+                    self.discard(stale_task_id);
+                    return Ok(StartInstallOutcome::StateChanged);
+                }
+                self.refresh_generations
+                    .write()
+                    .expect("task store poisoned")
+                    .insert(stale_task_id.into(), 1);
+                let preparation = self.prepare_with_generation(
+                    InstallRequest {
+                        task_id: None,
+                        tools: confirmed.request.tools.clone(),
+                        action: confirmed.request.action.clone(),
+                    },
+                    runtime,
+                    1,
+                )?;
+                Ok(StartInstallOutcome::Refreshed { preparation })
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub fn release_claim(&self, task_id: &str) {
@@ -423,7 +497,12 @@ impl InstallTaskStore {
             return Ok(task_id);
         }
         if !task.plan.actions.is_empty() {
-            if let Err(error) = runtime.repair(&task.plan) {
+            if let Err(error) = runtime.repair(&task.plan, cancelled.as_ref()) {
+                if cancelled.load(Ordering::Acquire) {
+                    let task_id = self.finish_cancelled(task_id, task, results)?;
+                    self.emit_terminal(&task_id, &mut emit);
+                    return Ok(task_id);
+                }
                 task.result = Some(InstallTaskResult {
                     status: InstallTaskStatus::Failed,
                     tools: Vec::new(),
@@ -543,13 +622,8 @@ impl InstallTaskStore {
         let task = tasks
             .get_mut(task_id)
             .ok_or_else(|| "unknown task".to_string())?;
-        if matches!(
-            task.stage,
-            InstallStage::Repairing | InstallStage::Completed
-        ) {
-            return Err(
-                "task cannot be cancelled during system installation or after completion".into(),
-            );
+        if matches!(task.stage, InstallStage::Completed) {
+            return Err("task cannot be cancelled after completion".into());
         }
         task.cancellation_requested = true;
         if let Some(token) = self
@@ -764,7 +838,7 @@ impl OrchestratorRuntime for CommandRuntime {
         ))
     }
 
-    fn repair(&self, plan: &RepairPlan) -> Result<(), InstallFailure> {
+    fn repair(&self, plan: &RepairPlan, cancelled: &AtomicBool) -> Result<(), InstallFailure> {
         use super::RepairActionKind;
         let dependency_actions: Vec<_> = plan
             .actions
@@ -798,7 +872,7 @@ impl OrchestratorRuntime for CommandRuntime {
             super::Architecture::X64
         };
         let install = async {
-            let index = super::fetch_node_index().await?;
+            let index = super::fetch_node_index(cancelled).await?;
             let release = super::resolve_node_release(
                 &index,
                 &super::node_policy(),
@@ -807,7 +881,7 @@ impl OrchestratorRuntime for CommandRuntime {
             )?;
             let temp =
                 std::env::temp_dir().join(format!("agent-manager-node-{}", std::process::id()));
-            super::install_node_release(adapter.as_ref(), &release, temp).await
+            super::install_node_release(adapter.as_ref(), &release, temp, cancelled).await
         };
         // CommandRuntime is run by the dedicated install worker. Its runtime
         // boundary must not be nested in Tauri's Tokio executor.
@@ -1179,7 +1253,7 @@ mod tests {
                 super::super::Architecture::X64,
             ))
         }
-        fn repair(&self, _: &RepairPlan) -> Result<(), InstallFailure> {
+        fn repair(&self, _: &RepairPlan, _: &AtomicBool) -> Result<(), InstallFailure> {
             Ok(())
         }
         fn install_tool(&self, tool: ToolId, _: bool) -> ToolInstallResult {
@@ -1223,7 +1297,7 @@ mod tests {
             fn snapshot(&self) -> Result<EnvironmentSnapshot, InstallFailure> {
                 Fake.snapshot()
             }
-            fn repair(&self, _: &RepairPlan) -> Result<(), InstallFailure> {
+            fn repair(&self, _: &RepairPlan, _: &AtomicBool) -> Result<(), InstallFailure> {
                 Ok(())
             }
             fn install_tool(&self, _: ToolId, _: bool) -> ToolInstallResult {
@@ -1298,7 +1372,7 @@ mod tests {
             Fake.snapshot()
         }
 
-        fn repair(&self, plan: &RepairPlan) -> Result<(), InstallFailure> {
+        fn repair(&self, plan: &RepairPlan, _: &AtomicBool) -> Result<(), InstallFailure> {
             Fake.repair(plan)
         }
 
@@ -1473,6 +1547,98 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.message_key, "installer.state_changed");
+        assert!(store.active_task().is_none());
+    }
+
+    #[test]
+    fn first_stale_confirmation_gets_one_server_prepared_refresh() {
+        let store = InstallTaskStore::default();
+        let prepared = InstallRequest {
+            task_id: Some("stale".into()),
+            tools: vec![ToolId::Codex],
+            action: super::super::InstallAction::Install,
+        };
+        store.prepare(prepared.clone(), &Fake).unwrap();
+        let outcome = store
+            .claim_or_refresh(
+                &ConfirmedInstallRequest {
+                    request: InstallRequest {
+                        tools: vec![ToolId::Claude],
+                        ..prepared
+                    },
+                    confirmed_action_ids: Vec::new(),
+                },
+                &Fake,
+            )
+            .unwrap();
+
+        let StartInstallOutcome::Refreshed { preparation } = outcome else {
+            panic!("expected a refreshed preparation");
+        };
+        assert_eq!(preparation.refresh_generation, 1);
+        assert!(store.get("stale").is_none());
+        assert_eq!(store.active_task().unwrap().task_id, preparation.task_id);
+    }
+
+    #[test]
+    fn second_stale_confirmation_discards_the_refreshed_task() {
+        let store = InstallTaskStore::default();
+        let first = store
+            .claim_or_refresh(
+                &ConfirmedInstallRequest {
+                    request: InstallRequest {
+                        task_id: Some("missing".into()),
+                        tools: vec![ToolId::Codex],
+                        action: super::super::InstallAction::Install,
+                    },
+                    confirmed_action_ids: Vec::new(),
+                },
+                &Fake,
+            )
+            .unwrap();
+        let StartInstallOutcome::Refreshed { preparation } = first else {
+            panic!("expected a refreshed preparation");
+        };
+        let second = store
+            .claim_or_refresh(
+                &ConfirmedInstallRequest {
+                    request: InstallRequest {
+                        task_id: Some(preparation.task_id.clone()),
+                        tools: vec![ToolId::Claude],
+                        action: super::super::InstallAction::Install,
+                    },
+                    confirmed_action_ids: Vec::new(),
+                },
+                &Fake,
+            )
+            .unwrap();
+
+        assert_eq!(second, StartInstallOutcome::StateChanged);
+        assert!(store.active_task().is_none());
+        assert!(store.get(&preparation.task_id).is_none());
+    }
+
+    #[test]
+    fn repeated_unknown_confirmation_is_bounded_and_releases_the_refresh() {
+        let store = InstallTaskStore::default();
+        let unknown = ConfirmedInstallRequest {
+            request: InstallRequest {
+                task_id: Some("missing".into()),
+                tools: vec![ToolId::Codex],
+                action: super::super::InstallAction::Install,
+            },
+            confirmed_action_ids: Vec::new(),
+        };
+        assert!(matches!(
+            store.claim_or_refresh(&unknown, &Fake).unwrap(),
+            StartInstallOutcome::Refreshed { .. }
+        ));
+        assert!(store.active_task().is_some());
+
+        assert_eq!(
+            store.claim_or_refresh(&unknown, &Fake).unwrap(),
+            StartInstallOutcome::StateChanged
+        );
         assert!(store.active_task().is_none());
     }
 
@@ -1746,7 +1912,7 @@ mod tests {
                 Fake.snapshot()
             }
 
-            fn repair(&self, plan: &RepairPlan) -> Result<(), InstallFailure> {
+            fn repair(&self, plan: &RepairPlan, _: &AtomicBool) -> Result<(), InstallFailure> {
                 Fake.repair(plan)
             }
 
@@ -1820,6 +1986,65 @@ mod tests {
                 },
             ] if tools.len() == 1 && tools[0].tool == ToolId::Codex
         ));
+    }
+
+    #[test]
+    fn cancellation_during_repair_is_applied_after_the_native_boundary_returns() {
+        struct RepairBoundaryFake {
+            store: InstallTaskStore,
+            installs: Arc<std::sync::atomic::AtomicUsize>,
+        }
+        impl OrchestratorRuntime for RepairBoundaryFake {
+            fn snapshot(&self) -> Result<EnvironmentSnapshot, InstallFailure> {
+                Fake.snapshot()
+            }
+            fn repair(&self, _: &RepairPlan, _: &AtomicBool) -> Result<(), InstallFailure> {
+                self.store.cancel("cancel-during-repair").unwrap();
+                Ok(())
+            }
+            fn install_tool(&self, tool: ToolId, _: bool) -> ToolInstallResult {
+                self.installs.fetch_add(1, Ordering::Relaxed);
+                Fake.install_tool(tool, false)
+            }
+        }
+
+        let store = InstallTaskStore::default();
+        let request = InstallRequest {
+            task_id: Some("cancel-during-repair".into()),
+            tools: vec![ToolId::Codex],
+            action: super::super::InstallAction::Install,
+        };
+        let preparation = store.prepare(request.clone(), &Fake).unwrap();
+        let installs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        store
+            .start_with_events(
+                ConfirmedInstallRequest {
+                    request,
+                    confirmed_action_ids: preparation
+                        .plan
+                        .actions
+                        .iter()
+                        .map(|action| action.id.clone())
+                        .collect(),
+                },
+                &RepairBoundaryFake {
+                    store: store.clone(),
+                    installs: installs.clone(),
+                },
+                |_| {},
+            )
+            .unwrap();
+
+        assert_eq!(installs.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            store
+                .get("cancel-during-repair")
+                .unwrap()
+                .result
+                .unwrap()
+                .status,
+            InstallTaskStatus::CancelledByUser
+        );
     }
 
     #[test]
