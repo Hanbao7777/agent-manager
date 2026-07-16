@@ -1,6 +1,7 @@
 use std::{
     ffi::{OsStr, OsString},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use super::{
@@ -12,6 +13,8 @@ const BLOCK_START: &[u8] = b"# >>> Agent Manager managed PATH >>>";
 const BLOCK_END: &[u8] = b"# <<< Agent Manager managed PATH <<<";
 const REG_SZ: u32 = 1;
 const REG_EXPAND_SZ: u32 = 2;
+#[cfg(target_os = "macos")]
+static PROFILE_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PathPersistenceRequest {
@@ -101,7 +104,7 @@ impl CleanPathProbe for ProcessPathProbe {
         let shadowed = request
             .external_candidates
             .iter()
-            .filter(|candidate| *candidate != &request.managed_executable)
+            .filter(|candidate| !paths_equivalent(candidate, &request.managed_executable))
             .cloned()
             .collect();
         Ok(PathProbeResult {
@@ -183,10 +186,7 @@ pub(crate) fn persist_windows_path<S: WindowsPathStore, P: CleanPathProbe>(
     );
 
     let updated_process = prepend_windows_path(
-        prior_process
-            .as_deref()
-            .and_then(OsStr::to_str)
-            .unwrap_or_default(),
+        &process_path_text(prior_process.as_deref())?,
         &request.managed_bin,
     )?;
     let mutation = (|| {
@@ -226,6 +226,16 @@ pub(crate) fn persist_windows_path<S: WindowsPathStore, P: CleanPathProbe>(
     }
 }
 
+fn process_path_text(path: Option<&OsStr>) -> Result<String, InstallFailure> {
+    match path {
+        Some(path) => path
+            .to_str()
+            .map(str::to_owned)
+            .ok_or_else(|| path_failure("running process PATH is not valid Unicode")),
+        None => Ok(String::new()),
+    }
+}
+
 fn restore_windows_state<S: WindowsPathStore>(
     store: &mut S,
     registry: Option<&WindowsRegistryValue>,
@@ -249,6 +259,16 @@ fn restore_windows_state<S: WindowsPathStore>(
 pub(crate) fn persist_host_path(
     request: &PathPersistenceRequest,
 ) -> Result<PathProbeResult, InstallFailure> {
+    let expected = dirs::data_local_dir()
+        .ok_or_else(|| path_failure("current-user local application data is unavailable"))?
+        .join("Agent-Manager")
+        .join("npm")
+        .join("bin");
+    if !paths_equivalent(&request.managed_bin, &expected) {
+        return Err(path_failure(
+            "managed Windows bin is outside the approved root",
+        ));
+    }
     persist_windows_path(&mut WindowsRegistryStore, &ProcessPathProbe, request)
 }
 
@@ -401,6 +421,17 @@ fn windows_path_key(path: &str) -> String {
         .to_lowercase()
 }
 
+fn paths_equivalent(left: &Path, right: &Path) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        windows_path_key(&left.to_string_lossy()) == windows_path_key(&right.to_string_lossy())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        left == right
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProfileSnapshot {
     pub(crate) existed: bool,
@@ -426,28 +457,23 @@ struct StdMacosProfileStore {
 #[cfg(target_os = "macos")]
 impl StdMacosProfileStore {
     fn for_login_shell() -> Result<Self, InstallFailure> {
+        let home =
+            dirs::home_dir().ok_or_else(|| path_failure("current-user home is unavailable"))?;
         let shell = std::env::var_os("SHELL")
-            .and_then(|shell| {
-                Path::new(&shell)
-                    .file_name()
-                    .map(|name| name.to_os_string())
-            })
-            .and_then(|shell| shell.into_string().ok())
             .ok_or_else(|| path_failure("current shell is unavailable; repair PATH manually"))?;
-        let profile = match shell.as_str() {
-            "zsh" => ".zprofile",
-            "bash" => ".bash_profile",
-            _ => {
-                return Err(path_failure(
-                    "only zsh and bash login profiles can be updated automatically",
-                ))
-            }
-        };
         Ok(Self {
-            profile: dirs::home_dir()
-                .ok_or_else(|| path_failure("current-user home is unavailable"))?
-                .join(profile),
+            profile: login_profile_for_shell(&home, &shell)?,
         })
+    }
+}
+
+fn login_profile_for_shell(home: &Path, shell: &OsStr) -> Result<PathBuf, InstallFailure> {
+    match Path::new(shell).file_name().and_then(OsStr::to_str) {
+        Some("zsh") => Ok(home.join(".zprofile")),
+        Some("bash") => Ok(home.join(".bash_profile")),
+        _ => Err(path_failure(
+            "only zsh and bash login profiles can be updated automatically",
+        )),
     }
 }
 
@@ -488,18 +514,14 @@ impl MacosProfileStore for StdMacosProfileStore {
     ) -> Result<(), InstallFailure> {
         use std::io::Write;
         use std::os::unix::fs::PermissionsExt;
-        let parent = self
+        let _parent = self
             .profile
             .parent()
             .ok_or_else(|| path_failure("shell profile has no parent"))?;
-        let temporary = parent.join(format!(
-            ".{}.{}.tmp",
-            self.profile
-                .file_name()
-                .and_then(OsStr::to_str)
-                .unwrap_or("profile"),
-            std::process::id()
-        ));
+        let temporary = super::unique_temporary_path(
+            &self.profile,
+            PROFILE_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed),
+        );
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -507,19 +529,21 @@ impl MacosProfileStore for StdMacosProfileStore {
             .map_err(|error| {
                 path_failure(&format!("failed to create profile replacement: {error}"))
             })?;
-        file.write_all(contents)
-            .and_then(|_| file.sync_all())
-            .map_err(|error| {
-                path_failure(&format!("failed to write profile replacement: {error}"))
-            })?;
+        if let Err(error) = file.write_all(contents).and_then(|_| file.sync_all()) {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(path_failure(&format!(
+                "failed to write profile replacement: {error}"
+            )));
+        }
         if let Some(mode) = permissions {
-            std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(mode)).map_err(
-                |error| {
-                    path_failure(&format!(
-                        "failed to preserve shell profile permissions: {error}"
-                    ))
-                },
-            )?;
+            if let Err(error) =
+                std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(mode))
+            {
+                let _ = std::fs::remove_file(&temporary);
+                return Err(path_failure(&format!(
+                    "failed to preserve shell profile permissions: {error}"
+                )));
+            }
         }
         std::fs::rename(&temporary, &self.profile).map_err(|error| {
             let _ = std::fs::remove_file(&temporary);
@@ -605,15 +629,9 @@ pub(crate) fn update_macos_profile(
     } else {
         b"\n".as_slice()
     };
-    let quoted = quote_shell_path(managed_bin)?;
-    let mut block = Vec::new();
-    block.extend_from_slice(BLOCK_START);
-    block.extend_from_slice(line_ending);
-    block.extend_from_slice(format!("export PATH={quoted}:\"$PATH\"").as_bytes());
-    block.extend_from_slice(line_ending);
-    block.extend_from_slice(BLOCK_END);
+    let block = canonical_macos_block(original, managed_bin)?;
 
-    match managed_block_range(original)? {
+    match managed_block_range(original, &block)? {
         Some((start, end)) => {
             let mut updated = Vec::with_capacity(original.len() - (end - start) + block.len());
             updated.extend_from_slice(&original[..start]);
@@ -636,7 +654,10 @@ pub(crate) fn update_macos_profile(
     }
 }
 
-fn managed_block_range(contents: &[u8]) -> Result<Option<(usize, usize)>, InstallFailure> {
+fn managed_block_range(
+    contents: &[u8],
+    canonical_block: &[u8],
+) -> Result<Option<(usize, usize)>, InstallFailure> {
     for line in contents.split(|byte| *byte == b'\n') {
         let line = line.strip_suffix(b"\r").unwrap_or(line);
         if line
@@ -665,6 +686,11 @@ fn managed_block_range(contents: &[u8]) -> Result<Option<(usize, usize)>, Instal
                 ));
             }
             let after_end = end + BLOCK_END.len();
+            if contents.get(*start..after_end) != Some(canonical_block) {
+                return Err(path_failure(
+                    "managed PATH block is unexpected or has been modified; repair it manually",
+                ));
+            }
             Ok(Some((*start, after_end)))
         }
         _ => Err(path_failure(
@@ -673,8 +699,11 @@ fn managed_block_range(contents: &[u8]) -> Result<Option<(usize, usize)>, Instal
     }
 }
 
-fn count_managed_blocks(contents: &[u8]) -> Result<usize, InstallFailure> {
-    Ok(usize::from(managed_block_range(contents)?.is_some()))
+fn count_managed_blocks(contents: &[u8], managed_bin: &Path) -> Result<usize, InstallFailure> {
+    let block = canonical_macos_block(contents, managed_bin)?;
+    Ok(usize::from(
+        managed_block_range(contents, &block)?.is_some(),
+    ))
 }
 
 fn find_all(haystack: &[u8], needle: &[u8]) -> Vec<usize> {
@@ -700,6 +729,23 @@ pub(crate) fn quote_shell_path(path: &Path) -> Result<String, InstallFailure> {
         ));
     }
     Ok(format!("'{}'", path.replace('\'', "'\\''")))
+}
+
+fn canonical_macos_block(original: &[u8], managed_bin: &Path) -> Result<Vec<u8>, InstallFailure> {
+    let line_ending = if original.windows(2).any(|bytes| bytes == b"\r\n") {
+        b"\r\n".as_slice()
+    } else {
+        b"\n".as_slice()
+    };
+    let mut block = Vec::new();
+    block.extend_from_slice(BLOCK_START);
+    block.extend_from_slice(line_ending);
+    block.extend_from_slice(
+        format!("export PATH={}:\"$PATH\"", quote_shell_path(managed_bin)?).as_bytes(),
+    );
+    block.extend_from_slice(line_ending);
+    block.extend_from_slice(BLOCK_END);
+    Ok(block)
 }
 
 pub(crate) fn path_failure(detail: &str) -> InstallFailure {
@@ -743,7 +789,7 @@ mod tests {
 
         let replaced = update_macos_profile(&appended, &managed).unwrap();
         assert!(replaced.starts_with(original));
-        assert_eq!(count_managed_blocks(&replaced).unwrap(), 1);
+        assert_eq!(count_managed_blocks(&replaced, &managed).unwrap(), 1);
     }
 
     #[test]
@@ -760,6 +806,77 @@ mod tests {
     #[test]
     fn shell_path_quoting_does_not_interpolate_metacharacters() {
         assert!(quote_shell_path(Path::new("/Users/o'hare/$HOME;$(id)/bin")).is_err());
+    }
+
+    #[test]
+    fn macos_managed_root_is_the_only_quotable_path() {
+        let managed = dirs::home_dir().unwrap().join(".agent-manager/npm/bin");
+        assert!(quote_shell_path(&managed).is_ok());
+        assert!(quote_shell_path(&managed.parent().unwrap().join("other-bin")).is_err());
+    }
+
+    #[test]
+    fn login_shell_selection_supports_zsh_and_bash_only() {
+        let home = Path::new("/Users/tester");
+        assert_eq!(
+            login_profile_for_shell(home, OsStr::new("/bin/zsh")).unwrap(),
+            home.join(".zprofile")
+        );
+        assert_eq!(
+            login_profile_for_shell(home, OsStr::new("/bin/bash")).unwrap(),
+            home.join(".bash_profile")
+        );
+        assert!(login_profile_for_shell(home, OsStr::new("/bin/fish")).is_err());
+    }
+
+    #[test]
+    fn macos_profile_rejects_tampered_nested_reversed_and_duplicate_blocks() {
+        let managed = dirs::home_dir().unwrap().join(".agent-manager/npm/bin");
+        let canonical = update_macos_profile(b"export EDITOR=vim\r\n", &managed).unwrap();
+        let tampered = String::from_utf8(canonical.clone())
+            .unwrap()
+            .replace("export PATH=", "export PATH=/tmp:");
+        for contents in [
+            tampered.as_bytes(),
+            b"# <<< Agent Manager managed PATH <<<\n# >>> Agent Manager managed PATH >>>\n".as_slice(),
+            b"# >>> Agent Manager managed PATH >>>\n# >>> Agent Manager managed PATH >>>\n# <<< Agent Manager managed PATH <<<\n# <<< Agent Manager managed PATH <<<\n".as_slice(),
+        ] {
+            assert!(update_macos_profile(contents, &managed).is_err());
+        }
+    }
+
+    #[test]
+    fn malformed_macos_block_stops_before_profile_write() {
+        let managed = dirs::home_dir().unwrap().join(".agent-manager/npm/bin");
+        let request = PathPersistenceRequest {
+            managed_bin: managed.clone(),
+            managed_executable: managed.join("codex"),
+            executable_name: "codex".into(),
+            expected_version: "1.0.0".into(),
+            external_candidates: Vec::new(),
+        };
+        let mut store = RecordingMacosStore {
+            snapshot: ProfileSnapshot {
+                existed: true,
+                contents: b"# >>> Agent Manager managed PATH >>>\nexport PATH=/tmp:$PATH\n# <<< Agent Manager managed PATH <<<\n".to_vec(),
+                permissions: Some(0o600),
+            },
+            ..Default::default()
+        };
+        assert!(persist_macos_path(&mut store, &Probe { fail: false }, &request).is_err());
+        assert!(store.replacements.is_empty());
+    }
+
+    #[test]
+    fn macos_profile_preserves_crlf_and_final_newline_state() {
+        let managed = dirs::home_dir().unwrap().join(".agent-manager/npm/bin");
+        let crlf = update_macos_profile(b"export EDITOR=vim\r\n", &managed).unwrap();
+        assert!(crlf.windows(2).any(|pair| pair == b"\r\n"));
+        assert!(crlf.ends_with(b"\r\n"));
+        assert_eq!(update_macos_profile(&crlf, &managed).unwrap(), crlf);
+
+        let no_final = update_macos_profile(b"export EDITOR=vim", &managed).unwrap();
+        assert!(!no_final.ends_with(b"\n"));
     }
 
     #[derive(Default)]
@@ -904,6 +1021,53 @@ mod tests {
         .is_err());
         assert_eq!(store.registry, None);
         assert_eq!(store.process.as_deref(), Some(r"C:\Tools"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn windows_non_unicode_process_path_stops_before_registry_mutation() {
+        use std::os::unix::ffi::OsStringExt;
+        struct NonUnicodeStore {
+            registry: WindowsRegistryValue,
+            writes: usize,
+        }
+        impl WindowsPathStore for NonUnicodeStore {
+            fn read_user_path(&self) -> Result<Option<WindowsRegistryValue>, InstallFailure> {
+                Ok(Some(self.registry.clone()))
+            }
+            fn write_user_path(&mut self, _: &WindowsRegistryValue) -> Result<(), InstallFailure> {
+                self.writes += 1;
+                Ok(())
+            }
+            fn delete_user_path(&mut self) -> Result<(), InstallFailure> {
+                self.writes += 1;
+                Ok(())
+            }
+            fn process_path(&self) -> Option<OsString> {
+                Some(OsString::from_vec(vec![0xff]))
+            }
+            fn set_process_path(&mut self, _: Option<&OsStr>) -> Result<(), InstallFailure> {
+                self.writes += 1;
+                Ok(())
+            }
+            fn broadcast_environment_change(&mut self) -> Result<(), InstallFailure> {
+                self.writes += 1;
+                Ok(())
+            }
+        }
+        let prior = registry_value(r"C:\Tools", REG_SZ);
+        let mut store = NonUnicodeStore {
+            registry: prior.clone(),
+            writes: 0,
+        };
+        assert!(persist_windows_path(
+            &mut store,
+            &Probe { fail: false },
+            &PathPersistenceRequest::windows_fixture()
+        )
+        .is_err());
+        assert_eq!(store.registry, prior);
+        assert_eq!(store.writes, 0);
     }
 
     struct RecordingMacosStore {

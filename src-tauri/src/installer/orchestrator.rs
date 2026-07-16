@@ -873,22 +873,35 @@ impl OrchestratorRuntime for CommandRuntime {
             expected_version: version,
             external_candidates: shadowed_external,
         };
-        match super::path_persistence::persist_host_path(&request) {
-            Ok(probe) => {
-                result.path = Some(probe.selected.to_string_lossy().into_owned());
-                result.shadowed_paths = probe
-                    .shadowed
-                    .into_iter()
-                    .map(|path| path.to_string_lossy().into_owned())
-                    .collect();
-                result
-            }
-            Err(error) => ToolInstallResult {
-                status: ToolInstallStatus::InstalledNotRunnable,
-                failure: Some(error),
-                ..result
-            },
+        finalize_managed_install(result, request, super::path_persistence::persist_host_path)
+    }
+}
+
+fn finalize_managed_install<F>(
+    mut result: ToolInstallResult,
+    request: super::path_persistence::PathPersistenceRequest,
+    persist: F,
+) -> ToolInstallResult
+where
+    F: FnOnce(
+        &super::path_persistence::PathPersistenceRequest,
+    ) -> Result<super::path_persistence::PathProbeResult, InstallFailure>,
+{
+    match persist(&request) {
+        Ok(probe) => {
+            result.path = Some(probe.selected.to_string_lossy().into_owned());
+            result.shadowed_paths = probe
+                .shadowed
+                .into_iter()
+                .map(|path| path.to_string_lossy().into_owned())
+                .collect();
+            result
         }
+        Err(error) => ToolInstallResult {
+            status: ToolInstallStatus::InstalledNotRunnable,
+            failure: Some(error),
+            ..result
+        },
     }
 }
 
@@ -970,7 +983,7 @@ fn external_installation(
     let entries: Vec<PathBuf> =
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect();
     let existing = resolve_host_command(command_name, &entries)?;
-    if existing.starts_with(managed_root.join("bin")) {
+    if path_is_within(&existing, &managed_root.join("bin")) {
         return None;
     }
     let version = command_version(&existing);
@@ -996,14 +1009,42 @@ fn external_candidates(command_name: &str, managed_root: &Path) -> Vec<PathBuf> 
             entry.join(format!("{command_name}.cmd")),
         ] {
             if candidate.is_file()
-                && !candidate.starts_with(&managed_bin)
-                && !candidates.contains(&candidate)
+                && !path_is_within(&candidate, &managed_bin)
+                && !candidates.iter().any(|seen| paths_equal(seen, &candidate))
             {
                 candidates.push(candidate);
             }
         }
     }
     candidates
+}
+
+fn path_is_within(candidate: &Path, root: &Path) -> bool {
+    path_is_within_for_platform(candidate, root, cfg!(target_os = "windows"))
+}
+
+fn paths_equal(left: &Path, right: &Path) -> bool {
+    if !cfg!(target_os = "windows") {
+        return left == right;
+    }
+    windows_path_key(&left.to_string_lossy()) == windows_path_key(&right.to_string_lossy())
+}
+
+fn path_is_within_for_platform(candidate: &Path, root: &Path, windows: bool) -> bool {
+    if !windows {
+        return candidate.starts_with(root);
+    }
+    let candidate = windows_path_key(&candidate.to_string_lossy());
+    let root = windows_path_key(&root.to_string_lossy());
+    candidate == root || candidate.strip_prefix(&format!("{root}\\")).is_some()
+}
+
+fn windows_path_key(path: &str) -> String {
+    path.trim_matches('"')
+        .replace('/', "\\")
+        .trim()
+        .trim_end_matches('\\')
+        .to_ascii_lowercase()
 }
 
 fn resolve_node_npm_pair() -> Result<ResolvedNodeNpmPair, String> {
@@ -1078,6 +1119,102 @@ mod tests {
                 failure: None,
             }
         }
+    }
+
+    fn succeeded_result() -> ToolInstallResult {
+        ToolInstallResult {
+            tool: ToolId::Codex,
+            status: ToolInstallStatus::Succeeded,
+            version: Some("1.0.0".into()),
+            path: Some("managed/bin/codex".into()),
+            shadowed_paths: Vec::new(),
+            failure: None,
+        }
+    }
+
+    fn persistence_request() -> super::super::path_persistence::PathPersistenceRequest {
+        super::super::path_persistence::PathPersistenceRequest {
+            managed_bin: PathBuf::from("managed/bin"),
+            managed_executable: PathBuf::from("managed/bin/codex"),
+            executable_name: "codex".into(),
+            expected_version: "1.0.0".into(),
+            external_candidates: vec![PathBuf::from("external/codex")],
+        }
+    }
+
+    #[test]
+    fn preflight_does_not_invoke_tool_or_path_persistence() {
+        struct CountingRuntime(Arc<std::sync::atomic::AtomicUsize>);
+        impl OrchestratorRuntime for CountingRuntime {
+            fn snapshot(&self) -> Result<EnvironmentSnapshot, InstallFailure> {
+                Fake.snapshot()
+            }
+            fn repair(&self, _: &RepairPlan) -> Result<(), InstallFailure> {
+                Ok(())
+            }
+            fn install_tool(&self, _: ToolId, _: bool) -> ToolInstallResult {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                succeeded_result()
+            }
+        }
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let store = InstallTaskStore::default();
+        store
+            .prepare(
+                InstallRequest {
+                    task_id: Some("no-path-write".into()),
+                    tools: vec![ToolId::Codex],
+                    action: super::super::InstallAction::Install,
+                },
+                &CountingRuntime(calls.clone()),
+            )
+            .unwrap();
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn confirmed_managed_install_invokes_injected_path_persistence() {
+        let mut calls = 0;
+        let result =
+            finalize_managed_install(succeeded_result(), persistence_request(), |request| {
+                calls += 1;
+                Ok(super::super::path_persistence::PathProbeResult {
+                    selected: request.managed_executable.clone(),
+                    shadowed: request.external_candidates.clone(),
+                })
+            });
+        assert_eq!(calls, 1);
+        assert_eq!(result.status, ToolInstallStatus::Succeeded);
+        assert_eq!(result.shadowed_paths, vec!["external/codex"]);
+    }
+
+    #[test]
+    fn preserved_writable_external_install_does_not_reach_persistence_boundary() {
+        let decision = super::super::managed_npm::decide_managed_install(
+            super::super::managed_npm::ExistingCliInstallation::External {
+                runnable: true,
+                writable: true,
+            },
+        );
+        let mut persistence_calls = 0;
+        if decision != super::super::managed_npm::ManagedInstallDecision::PreserveExternal {
+            let _ = finalize_managed_install(succeeded_result(), persistence_request(), |_| {
+                persistence_calls += 1;
+                Err(super::super::path_persistence::path_failure(
+                    "unexpected persistence",
+                ))
+            });
+        }
+        assert_eq!(persistence_calls, 0);
+    }
+
+    #[test]
+    fn windows_managed_path_exclusion_is_case_insensitive() {
+        assert!(path_is_within_for_platform(
+            Path::new(r"C:\USERS\ME\APPDATA\LOCAL\AGENT-MANAGER\NPM\BIN\codex.cmd"),
+            Path::new(r"c:\users\me\appdata\local\Agent-Manager\npm\bin"),
+            true,
+        ));
     }
 
     struct ManagedSwitchFake;
