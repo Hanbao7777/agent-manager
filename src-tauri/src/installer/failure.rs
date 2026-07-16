@@ -22,17 +22,93 @@ static URL_USERINFO_RE: Lazy<Regex> = Lazy::new(|| {
 });
 
 static URL_SECRET_QUERY_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)([?&](?:token|access_token|api_key|key|signature|sig|password|pass)=)[^&#\s]+")
+    Regex::new(r"(?i)([?&](?:token|access_token|api_key|key|signature|sig|password|pass|secret|client_secret|credential|auth|authorization|code|session)=)[^&#\s]+")
         .expect("valid url secret query regex")
 });
 
+static ENV_ASSIGNMENT_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r#"(?im)(\b[A-Z_][A-Z0-9_]*\s*=\s*)(?:'[^'\r\n]*'|"[^"\r\n]*"|`[^`\r\n]*`|[^\s\r\n]+)"#,
+    )
+    .expect("valid environment assignment regex")
+});
+
+static JSON_SECRET_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r#"(?i)((?:"|')?[A-Z0-9_]*(?:API_KEY|ACCESS_KEY|SECRET|TOKEN|PASSWORD|PASS|CREDENTIALS?|AUTH|PRIVATE_KEY)[A-Z0-9_]*(?:"|')?\s*:\s*)(?:"[^"]*"|'[^']*'|[^\s,}\]]+)"#,
+    )
+    .expect("valid JSON secret regex")
+});
+
+static AUTH_HEADER_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?im)\b(Authorization|Proxy-Authorization)\s*:\s*[^\r\n]+")
+        .expect("valid authorization header regex")
+});
+
+static COMMON_TOKEN_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?i)\b(?:github_pat_[A-Za-z0-9_]{8,}|gh[pousr]_[A-Za-z0-9]{8,}|sk-[A-Za-z0-9_-]{8,}|xox[baprs]-[A-Za-z0-9-]{8,}|AIza[A-Za-z0-9_-]{8,})\b",
+    )
+    .expect("valid common token regex")
+});
+
+static WINDOWS_HOME_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"(?i)\b[A-Z]:[\\/](?:Users|Documents and Settings)[\\/][^\\/\s"'<>|]+"#)
+        .expect("valid Windows home regex")
+});
+
+static POSIX_HOME_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"/(?:Users|home)/[^/\s"'<>]+"#).expect("valid POSIX home regex"));
+
 pub fn redact_diagnostic(text: &str) -> String {
-    let value = SECRET_ASSIGNMENT_RE.replace_all(text, "$1=[REDACTED]");
+    let value = normalize_home_path(text);
+    let value = redact_home_username(&value);
+    let value = ENV_ASSIGNMENT_RE.replace_all(&value, "$1[REDACTED]");
+    let value = SECRET_ASSIGNMENT_RE.replace_all(&value, "$1=[REDACTED]");
+    let value = JSON_SECRET_RE.replace_all(&value, "$1\"[REDACTED]\"");
     let value = BEARER_RE.replace_all(&value, "Bearer [REDACTED]");
     let value = NPM_TOKEN_RE.replace_all(&value, "npm_[REDACTED]");
+    let value = COMMON_TOKEN_RE.replace_all(&value, "[REDACTED]");
+    let value = AUTH_HEADER_RE.replace_all(&value, "$1: [REDACTED]");
     let value = URL_USERINFO_RE.replace_all(&value, "$1[REDACTED]@$3");
     URL_SECRET_QUERY_RE
         .replace_all(&value, "$1[REDACTED]")
+        .into_owned()
+}
+
+fn normalize_home_path(text: &str) -> String {
+    let value = dirs::home_dir()
+        .and_then(|home| home.to_str().map(str::to_owned))
+        .map(|home| replace_literal_case_insensitive(text, &home, "~"))
+        .unwrap_or_else(|| text.to_string());
+    let value = WINDOWS_HOME_RE.replace_all(&value, "~");
+    POSIX_HOME_RE.replace_all(&value, "~").into_owned()
+}
+
+fn redact_home_username(text: &str) -> String {
+    let Some(username) = dirs::home_dir()
+        .and_then(|home| {
+            home.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .filter(|username| username.len() >= 3)
+    else {
+        return text.to_string();
+    };
+
+    Regex::new(&format!(
+        "(?i)(^|[^A-Za-z0-9_]){}([^A-Za-z0-9_]|$)",
+        regex::escape(&username)
+    ))
+    .expect("escaped username is a valid regex")
+    .replace_all(text, "${1}[USER]${2}")
+    .into_owned()
+}
+
+fn replace_literal_case_insensitive(text: &str, literal: &str, replacement: &str) -> String {
+    Regex::new(&format!("(?i){}", regex::escape(literal)))
+        .expect("escaped literal is a valid regex")
+        .replace_all(text, replacement)
         .into_owned()
 }
 
@@ -636,6 +712,29 @@ mod tests {
         assert!(clean.contains("PaSsWoRd=[REDACTED]"));
         assert!(clean.contains("Bearer [REDACTED]"));
         assert!(clean.contains("https://[REDACTED]@proxy.example.com:8080?api_key=[REDACTED]"));
+    }
+
+    #[test]
+    fn normalizes_cross_platform_home_paths_and_environment_values() {
+        let raw = r#"C:\Users\Alice\AppData /Users/bob/.config /home/carol/.cache PATH=/secret/bin HOME='/Users/bob'"#;
+        let clean = redact_diagnostic(raw);
+
+        assert_eq!(
+            clean,
+            r#"~\AppData ~/.config ~/.cache PATH=[REDACTED] HOME=[REDACTED]"#
+        );
+    }
+
+    #[test]
+    fn redaction_is_deterministic_for_headers_and_common_tokens() {
+        let raw = "Authorization: Basic abc123\nProxy-Authorization: secret\nghp_abcdefgh12345678 sk-abcdefgh12345678\n{\"api_key\":\"json-secret\"}";
+        let first = redact_diagnostic(raw);
+
+        assert_eq!(first, redact_diagnostic(raw));
+        assert!(!first.contains("abc123"));
+        assert!(!first.contains("ghp_"));
+        assert!(!first.contains("sk-"));
+        assert!(!first.contains("json-secret"));
     }
 
     #[test]

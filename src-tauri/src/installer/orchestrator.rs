@@ -138,6 +138,20 @@ impl InstallTaskStore {
             .cloned()
     }
 
+    pub fn latest_task(&self) -> Option<InstallTaskSnapshot> {
+        self.tasks
+            .read()
+            .ok()?
+            .values()
+            .max_by_key(|task| {
+                task.task_id
+                    .strip_prefix("install-")
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .unwrap_or_default()
+            })
+            .cloned()
+    }
+
     /// Returns terminal events for work interrupted before this application
     /// instance started. Draining prevents duplicate startup notifications.
     pub fn take_startup_recovery_events(&self) -> Vec<super::InstallTaskEvent> {

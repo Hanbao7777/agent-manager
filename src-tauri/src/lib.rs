@@ -1,4 +1,5 @@
 mod commands;
+mod diagnostics;
 pub(crate) mod installer;
 #[cfg(target_os = "linux")]
 mod linux_fix;
@@ -54,6 +55,7 @@ pub fn run() {
         .manage(installer::InstallTaskStore::with_persistence(
             panic_hook::get_app_config_dir(),
         ))
+        .manage(diagnostics::DiagnosticReportStore::default())
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(window_state_flags())
@@ -133,6 +135,8 @@ pub fn run() {
             installer::get_active_install_task,
             installer::replay_startup_install_recovery,
             installer::cancel_install_task,
+            diagnostics::generate_diagnostic_report,
+            diagnostics::export_diagnostic_report,
         ]);
 
     let app = builder
