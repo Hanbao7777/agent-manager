@@ -55,6 +55,8 @@ Reviewed on 2026-07-16. Every non-local `uses:` reference under `.github/workflo
 
 The default manual internal verification selects `macos-15`, which GitHub documents as a standard M1/arm64 runner. Setting the explicit `release_candidate_intel` dispatch input to `true` selects `macos-15-intel`, which GitHub documents as a standard Intel runner. Both labels appear in GitHub's standard public-repository runner table, whose use is free and unlimited for public repositories; neither is a larger-runner label. Source: [GitHub-hosted runners reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#standard-github-hosted-runners-for-public-repositories).
 
+Concurrency is scoped by ref and selected gate. Apple Silicon and Intel release-candidate verification can run concurrently for the same ref, while a duplicate dispatch for the same ref and gate cancels its stale predecessor.
+
 The `build_artifacts` input remains `false` by default. Artifact build, verification, and upload steps remain conditional on `build_artifacts`, while artifact-free Apple Silicon and Intel jobs retain the 15-minute job cap and 12-minute Rust check/test step caps.
 
 ## Local audit
