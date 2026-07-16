@@ -519,7 +519,7 @@ where
 
     prepare_owned_cache(filesystem, &request.cache_root)?;
     enforce_cache_cap(filesystem, &request.cache_root)?;
-    let base_environment = clean_environment(&request.node_path, &request.npm_path, None)?;
+    let base_environment = prepare_clean_environment(filesystem, request, None)?;
     let resolution_spec = ProcessSpec {
         program: request.npm_path.clone(),
         args: vec![
@@ -544,6 +544,7 @@ where
         }
     };
     enforce_cache_cap(filesystem, &request.cache_root)?;
+    let base_environment = prepare_clean_environment(filesystem, request, None)?;
     validate_version_component(&version)?;
 
     let versions_root = request
@@ -576,11 +577,7 @@ where
             runner,
             &final_executable,
             &version,
-            clean_environment(
-                &request.node_path,
-                &request.npm_path,
-                final_executable.parent(),
-            )?,
+            prepare_clean_environment(filesystem, request, final_executable.parent())?,
         )?;
     } else {
         if filesystem.inspect(&version_directory)? != PathState::Missing {
@@ -650,9 +647,9 @@ where
                         runner,
                         &staging_executable,
                         &version,
-                        clean_environment(
-                            &request.node_path,
-                            &request.npm_path,
+                        prepare_clean_environment(
+                            filesystem,
+                            request,
                             staging_executable.parent(),
                         )?,
                     )
@@ -688,10 +685,47 @@ where
     Ok((version, entry_point))
 }
 
+fn prepare_clean_environment<F: ManagedFilesystem>(
+    filesystem: &F,
+    request: &ManagedNpmRequest,
+    tool_directory: Option<&Path>,
+) -> Result<ProcessEnvironment, InstallFailure> {
+    let environment_root = request.cache_root.join("environment");
+    let home = environment_root.join("home");
+    let temp = environment_root.join("temp");
+    create_safe_directory(filesystem, &request.cache_root, &home)?;
+    create_safe_directory(filesystem, &request.cache_root, &temp)?;
+
+    if request.platform == Platform::Windows {
+        create_safe_directory(
+            filesystem,
+            &request.cache_root,
+            &home.join("AppData").join("Roaming"),
+        )?;
+        create_safe_directory(
+            filesystem,
+            &request.cache_root,
+            &home.join("AppData").join("Local"),
+        )?;
+    }
+
+    clean_environment(
+        &request.node_path,
+        &request.npm_path,
+        tool_directory,
+        &request.platform,
+        &home,
+        &temp,
+    )
+}
+
 fn clean_environment(
     node_path: &Path,
     npm_path: &Path,
     tool_directory: Option<&Path>,
+    platform: &Platform,
+    home: &Path,
+    temp: &Path,
 ) -> Result<ProcessEnvironment, InstallFailure> {
     let mut path_entries = Vec::new();
     for path in [node_path, npm_path] {
@@ -716,17 +750,36 @@ fn clean_environment(
             &format!("failed to construct clean process PATH: {error}"),
         )
     })?;
-    let values = vec![(OsString::from("PATH"), path)];
-    #[cfg(target_os = "windows")]
-    let values = {
-        let mut values = values;
+    let mut values = vec![(OsString::from("PATH"), path)];
+    match platform {
+        Platform::Windows => {
+            values.extend([
+                (OsString::from("USERPROFILE"), home.as_os_str().to_owned()),
+                (OsString::from("HOME"), home.as_os_str().to_owned()),
+                (
+                    OsString::from("APPDATA"),
+                    home.join("AppData").join("Roaming").into_os_string(),
+                ),
+                (
+                    OsString::from("LOCALAPPDATA"),
+                    home.join("AppData").join("Local").into_os_string(),
+                ),
+                (OsString::from("TEMP"), temp.as_os_str().to_owned()),
+                (OsString::from("TMP"), temp.as_os_str().to_owned()),
+            ]);
+        }
+        Platform::Macos => values.extend([
+            (OsString::from("HOME"), home.as_os_str().to_owned()),
+            (OsString::from("TMPDIR"), temp.as_os_str().to_owned()),
+        ]),
+    }
+    if *platform == Platform::Windows {
         for name in ["SYSTEMROOT", "COMSPEC"] {
             if let Some(value) = std::env::var_os(name) {
                 values.push((OsString::from(name), value));
             }
         }
-        values
-    };
+    }
     Ok(ProcessEnvironment { values })
 }
 
@@ -1409,19 +1462,82 @@ mod tests {
     #[test]
     fn verification_uses_a_clean_explicit_environment() {
         let root = TestDirectory::new("clean-env");
-        let (_, _, specs) = install(&root, "1.2.3", "1.2.3", true);
+        let (_, resolver, specs) = install(&root, "1.2.3", "1.2.3", true);
+        let isolated_home = root.0.join("cache/environment/home");
+        let isolated_temp = root.0.join("cache/environment/temp");
+        let resolution = resolver.calls.lock().unwrap();
         let specs = specs.lock().unwrap();
-        let verification = &specs[1];
-        assert!(verification.clear_environment);
-        assert_eq!(verification.args, vec![OsString::from("--version")]);
-        assert!(verification
-            .environment
+        for spec in [&resolution[0], &specs[0], &specs[1]] {
+            assert!(spec.clear_environment);
+            assert_eq!(
+                environment_value(&spec.environment, "USERPROFILE"),
+                Some(isolated_home.as_os_str())
+            );
+            assert_eq!(
+                environment_value(&spec.environment, "HOME"),
+                Some(isolated_home.as_os_str())
+            );
+            assert_eq!(
+                environment_value(&spec.environment, "APPDATA"),
+                Some(isolated_home.join("AppData/Roaming").as_os_str())
+            );
+            assert_eq!(
+                environment_value(&spec.environment, "LOCALAPPDATA"),
+                Some(isolated_home.join("AppData/Local").as_os_str())
+            );
+            assert_eq!(
+                environment_value(&spec.environment, "TEMP"),
+                Some(isolated_temp.as_os_str())
+            );
+            assert_eq!(
+                environment_value(&spec.environment, "TMP"),
+                Some(isolated_temp.as_os_str())
+            );
+            assert!(environment_value(&spec.environment, "PATH").is_some());
+            assert!(!spec.environment.values.iter().any(|(name, _)| {
+                name.to_string_lossy().contains("TOKEN") || name.to_string_lossy().contains("PROXY")
+            }));
+        }
+        assert_eq!(specs[1].args, vec![OsString::from("--version")]);
+        assert!(isolated_home.join("AppData/Roaming").is_dir());
+        assert!(isolated_home.join("AppData/Local").is_dir());
+        assert!(isolated_temp.is_dir());
+    }
+
+    #[test]
+    fn macos_clean_environment_uses_only_isolated_home_and_temp() {
+        let root = TestDirectory::new("macos-clean-env");
+        let home = root.0.join("home");
+        let temp = root.0.join("temp");
+        let environment = clean_environment(
+            &root.0.join("runtime/node"),
+            &root.0.join("runtime/npm"),
+            None,
+            &Platform::Macos,
+            &home,
+            &temp,
+        )
+        .unwrap();
+
+        assert_eq!(
+            environment_value(&environment, "HOME"),
+            Some(home.as_os_str())
+        );
+        assert_eq!(
+            environment_value(&environment, "TMPDIR"),
+            Some(temp.as_os_str())
+        );
+        for name in ["APPDATA", "LOCALAPPDATA", "USERPROFILE", "TEMP", "TMP"] {
+            assert_eq!(environment_value(&environment, name), None);
+        }
+    }
+
+    fn environment_value<'a>(environment: &'a ProcessEnvironment, name: &str) -> Option<&'a OsStr> {
+        environment
             .values
             .iter()
-            .any(|(name, _)| name == "PATH"));
-        assert!(!verification.environment.values.iter().any(|(name, _)| {
-            name.to_string_lossy().contains("TOKEN") || name.to_string_lossy().contains("PROXY")
-        }));
+            .find(|(candidate, _)| candidate == name)
+            .map(|(_, value)| value.as_os_str())
     }
 
     #[test]
