@@ -108,6 +108,10 @@ Status: Complete; the Worker exhausted its provider quota after producing an unc
 
 ### Phase 3 — Managed npm installation
 
+Owner: Paseo Worker `b5637e36-6cc6-4a26-9975-a8d2beab02bf`
+Workspace: isolated Paseo worktree `phase3-managed-npm`
+Status: In progress
+
 - Add a fixed package allowlist and resolve `latest` at the start of the confirmed task.
 - Stage into a tool/version-specific directory beneath the managed root. Pass prefix/cache paths as process arguments, never interpolated shell text.
 - Reject unsafe path components and filesystem indirection before every write boundary.
