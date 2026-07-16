@@ -366,6 +366,7 @@ fn result(
         status,
         version,
         path: path.map(|path| path.to_string_lossy().into_owned()),
+        shadowed_paths: Vec::new(),
         failure,
     }
 }

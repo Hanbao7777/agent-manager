@@ -484,6 +484,7 @@ where
             status: ToolInstallStatus::Succeeded,
             version: Some(version),
             path: Some(entry_point.to_string_lossy().into_owned()),
+            shadowed_paths: Vec::new(),
             failure: None,
         },
         Err(error) => ToolInstallResult {
@@ -491,6 +492,7 @@ where
             status: ToolInstallStatus::Failed,
             version: None,
             path: None,
+            shadowed_paths: Vec::new(),
             failure: Some(error),
         },
     }

@@ -250,6 +250,8 @@ pub struct ToolInstallResult {
     pub status: ToolInstallStatus,
     pub version: Option<String>,
     pub path: Option<String>,
+    #[serde(default)]
+    pub shadowed_paths: Vec<String>,
     pub failure: Option<InstallFailure>,
 }
 

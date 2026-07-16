@@ -4,6 +4,7 @@ mod managed_npm;
 mod model;
 mod node_pair_resolution;
 pub mod orchestrator;
+mod path_persistence;
 pub mod platform;
 mod policy;
 pub mod probe;

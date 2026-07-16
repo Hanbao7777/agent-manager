@@ -789,10 +789,12 @@ impl OrchestratorRuntime for CommandRuntime {
                     status: ToolInstallStatus::Failed,
                     version: None,
                     path: None,
+                    shadowed_paths: Vec::new(),
                     failure: Some(error),
                 };
             }
         };
+        let shadowed_external = external_candidates(strategy.command_name, &managed_root);
         if let Some((existing, version, writable)) =
             external_installation(strategy.command_name, &managed_root)
         {
@@ -809,6 +811,7 @@ impl OrchestratorRuntime for CommandRuntime {
                         status: ToolInstallStatus::Succeeded,
                         version,
                         path: Some(existing.display().to_string()),
+                        shadowed_paths: Vec::new(),
                         failure: None,
                     };
                 }
@@ -835,22 +838,57 @@ impl OrchestratorRuntime for CommandRuntime {
                     status: ToolInstallStatus::Failed,
                     version: None,
                     path: None,
+                    shadowed_paths: Vec::new(),
                     failure: Some(error),
                 };
             }
         };
-        super::managed_npm::install_managed_npm_tool(super::managed_npm::ManagedNpmRequest {
-            tool: managed_tool,
-            platform: if cfg!(target_os = "windows") {
-                super::Platform::Windows
-            } else {
-                super::Platform::Macos
+        let managed_bin = managed_root.join("bin");
+        let mut result =
+            super::managed_npm::install_managed_npm_tool(super::managed_npm::ManagedNpmRequest {
+                tool: managed_tool,
+                platform: if cfg!(target_os = "windows") {
+                    super::Platform::Windows
+                } else {
+                    super::Platform::Macos
+                },
+                npm_path: pair.npm,
+                node_path: pair.node,
+                managed_root: managed_root.clone(),
+                cache_root,
+            });
+        if result.status != ToolInstallStatus::Succeeded {
+            return result;
+        }
+        let Some(version) = result.version.clone() else {
+            return tool_failure(tool, "managed install succeeded without a version");
+        };
+        let Some(executable) = result.path.as_ref().map(PathBuf::from) else {
+            return tool_failure(tool, "managed install succeeded without an entry point");
+        };
+        let request = super::path_persistence::PathPersistenceRequest {
+            managed_bin,
+            managed_executable: executable,
+            executable_name: strategy.command_name.into(),
+            expected_version: version,
+            external_candidates: shadowed_external,
+        };
+        match super::path_persistence::persist_host_path(&request) {
+            Ok(probe) => {
+                result.path = Some(probe.selected.to_string_lossy().into_owned());
+                result.shadowed_paths = probe
+                    .shadowed
+                    .into_iter()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .collect();
+                result
+            }
+            Err(error) => ToolInstallResult {
+                status: ToolInstallStatus::InstalledNotRunnable,
+                failure: Some(error),
+                ..result
             },
-            npm_path: pair.npm,
-            node_path: pair.node,
-            managed_root,
-            cache_root,
-        })
+        }
     }
 }
 
@@ -907,6 +945,7 @@ fn tool_failure(tool: ToolId, detail: &str) -> ToolInstallResult {
         status: ToolInstallStatus::Failed,
         version: None,
         path: None,
+        shadowed_paths: Vec::new(),
         failure: Some(failure(InstallFailureCode::ToolInstallFailure, detail)),
     }
 }
@@ -943,6 +982,28 @@ fn external_installation(
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     let writable = false;
     Some((existing, version, writable))
+}
+
+fn external_candidates(command_name: &str, managed_root: &Path) -> Vec<PathBuf> {
+    let entries: Vec<PathBuf> =
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect();
+    let managed_bin = managed_root.join("bin");
+    let mut candidates = Vec::new();
+    for entry in entries {
+        for candidate in [
+            entry.join(command_name),
+            entry.join(format!("{command_name}.exe")),
+            entry.join(format!("{command_name}.cmd")),
+        ] {
+            if candidate.is_file()
+                && !candidate.starts_with(&managed_bin)
+                && !candidates.contains(&candidate)
+            {
+                candidates.push(candidate);
+            }
+        }
+    }
+    candidates
 }
 
 fn resolve_node_npm_pair() -> Result<ResolvedNodeNpmPair, String> {
@@ -1013,6 +1074,7 @@ mod tests {
                 status: ToolInstallStatus::Succeeded,
                 version: Some("1.0.0".into()),
                 path: None,
+                shadowed_paths: Vec::new(),
                 failure: None,
             }
         }
