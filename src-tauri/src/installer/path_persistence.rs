@@ -783,6 +783,14 @@ mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
 
+    fn macos_managed_bin_fixture() -> PathBuf {
+        dirs::home_dir()
+            .unwrap()
+            .join(".agent-manager")
+            .join("npm")
+            .join("bin")
+    }
+
     #[test]
     fn windows_path_prepends_once_and_preserves_unrelated_entries() {
         let prior = r"C:\Tools;;c:/users/me/agent-manager/npm/bin\;C:\Other ";
@@ -820,7 +828,7 @@ mod tests {
 
     #[test]
     fn macos_profile_append_and_replace_preserve_unrelated_bytes() {
-        let managed = dirs::home_dir().unwrap().join(".agent-manager/npm/bin");
+        let managed = macos_managed_bin_fixture();
         let original = b"export EDITOR=vim\r\n";
         let appended = update_macos_profile(original, &managed).unwrap();
         assert!(appended.starts_with(original));
@@ -840,7 +848,7 @@ mod tests {
             b"# <<< Agent Manager managed PATH <<<\n".as_slice(),
             b"# >>> Agent Manager managed PATH >>>\n# >>> Agent Manager managed PATH >>>\n# <<< Agent Manager managed PATH <<<\n# <<< Agent Manager managed PATH <<<\n".as_slice(),
         ] {
-            assert!(update_macos_profile(contents, &dirs::home_dir().unwrap().join(".agent-manager/npm/bin")).is_err());
+            assert!(update_macos_profile(contents, &macos_managed_bin_fixture()).is_err());
         }
     }
 
@@ -851,7 +859,7 @@ mod tests {
 
     #[test]
     fn macos_managed_root_is_the_only_quotable_path() {
-        let managed = dirs::home_dir().unwrap().join(".agent-manager/npm/bin");
+        let managed = macos_managed_bin_fixture();
         assert!(quote_shell_path(&managed).is_ok());
         assert!(quote_shell_path(&managed.parent().unwrap().join("other-bin")).is_err());
     }
@@ -872,7 +880,7 @@ mod tests {
 
     #[test]
     fn macos_profile_rejects_tampered_nested_reversed_and_duplicate_blocks() {
-        let managed = dirs::home_dir().unwrap().join(".agent-manager/npm/bin");
+        let managed = macos_managed_bin_fixture();
         let canonical = update_macos_profile(b"export EDITOR=vim\r\n", &managed).unwrap();
         let tampered = String::from_utf8(canonical.clone())
             .unwrap()
@@ -888,7 +896,7 @@ mod tests {
 
     #[test]
     fn malformed_macos_block_stops_before_profile_write() {
-        let managed = dirs::home_dir().unwrap().join(".agent-manager/npm/bin");
+        let managed = macos_managed_bin_fixture();
         let request = PathPersistenceRequest {
             managed_bin: managed.clone(),
             approved_runtime_dirs: Vec::new(),
@@ -911,7 +919,7 @@ mod tests {
 
     #[test]
     fn macos_profile_preserves_crlf_and_final_newline_state() {
-        let managed = dirs::home_dir().unwrap().join(".agent-manager/npm/bin");
+        let managed = macos_managed_bin_fixture();
         let crlf = update_macos_profile(b"export EDITOR=vim\r\n", &managed).unwrap();
         assert!(crlf.windows(2).any(|pair| pair == b"\r\n"));
         assert!(crlf.ends_with(b"\r\n"));
@@ -1159,7 +1167,7 @@ mod tests {
 
     #[test]
     fn macos_postcondition_failure_rolls_back_existing_profile_bytes_and_permissions() {
-        let managed = dirs::home_dir().unwrap().join(".agent-manager/npm/bin");
+        let managed = macos_managed_bin_fixture();
         let request = PathPersistenceRequest {
             managed_bin: managed.clone(),
             approved_runtime_dirs: Vec::new(),
@@ -1186,7 +1194,7 @@ mod tests {
 
     #[test]
     fn macos_missing_profile_is_removed_when_postcondition_fails() {
-        let managed = dirs::home_dir().unwrap().join(".agent-manager/npm/bin");
+        let managed = macos_managed_bin_fixture();
         let request = PathPersistenceRequest {
             managed_bin: managed.clone(),
             approved_runtime_dirs: Vec::new(),
