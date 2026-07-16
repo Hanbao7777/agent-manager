@@ -1463,8 +1463,8 @@ mod tests {
     fn verification_uses_a_clean_explicit_environment() {
         let root = TestDirectory::new("clean-env");
         let (_, resolver, specs) = install(&root, "1.2.3", "1.2.3", true);
-        let isolated_home = root.0.join("cache/environment/home");
-        let isolated_temp = root.0.join("cache/environment/temp");
+        let isolated_home = root.0.join("cache").join("environment").join("home");
+        let isolated_temp = root.0.join("cache").join("environment").join("temp");
         let resolution = resolver.calls.lock().unwrap();
         let specs = specs.lock().unwrap();
         for spec in [&resolution[0], &specs[0], &specs[1]] {
@@ -1479,11 +1479,11 @@ mod tests {
             );
             assert_eq!(
                 environment_value(&spec.environment, "APPDATA"),
-                Some(isolated_home.join("AppData/Roaming").as_os_str())
+                Some(isolated_home.join("AppData").join("Roaming").as_os_str())
             );
             assert_eq!(
                 environment_value(&spec.environment, "LOCALAPPDATA"),
-                Some(isolated_home.join("AppData/Local").as_os_str())
+                Some(isolated_home.join("AppData").join("Local").as_os_str())
             );
             assert_eq!(
                 environment_value(&spec.environment, "TEMP"),
@@ -1499,8 +1499,8 @@ mod tests {
             }));
         }
         assert_eq!(specs[1].args, vec![OsString::from("--version")]);
-        assert!(isolated_home.join("AppData/Roaming").is_dir());
-        assert!(isolated_home.join("AppData/Local").is_dir());
+        assert!(isolated_home.join("AppData").join("Roaming").is_dir());
+        assert!(isolated_home.join("AppData").join("Local").is_dir());
         assert!(isolated_temp.is_dir());
     }
 
