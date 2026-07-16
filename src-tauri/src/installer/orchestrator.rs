@@ -633,38 +633,52 @@ impl OrchestratorRuntime for CommandRuntime {
             ));
         };
         #[cfg(any(target_os = "windows", target_os = "macos"))]
-        let available_disk_bytes = system_access::available_disk_bytes(&std::env::temp_dir())?;
-        #[cfg(any(target_os = "windows", target_os = "macos"))]
-        let temporary_directory_writable = system_access::directory_writable(&std::env::temp_dir());
+        {
+            let temporary_directory = std::env::temp_dir();
+            let (managed_install_directory, managed_cache_directory) = managed_directories()?;
+            let temporary_disk_path =
+                system_access::nearest_existing_directory(&temporary_directory)?;
+            let managed_disk_path =
+                system_access::nearest_existing_directory(&managed_install_directory)?;
+            let available_disk_bytes = system_access::available_disk_bytes(&temporary_disk_path)?;
+            let managed_available_disk_bytes =
+                system_access::available_disk_bytes(&managed_disk_path)?;
+
+            return Ok(EnvironmentSnapshot {
+                platform,
+                architecture: if cfg!(target_arch = "aarch64") {
+                    super::Architecture::Arm64
+                } else {
+                    super::Architecture::X64
+                },
+                architecture_supported: true,
+                node_version: node_version.clone(),
+                npm_version: npm_version.clone(),
+                node_path: node.as_ref().map(|p| p.display().to_string()),
+                npm_path: npm.as_ref().map(|p| p.display().to_string()),
+                node_runnable: node_version.is_some(),
+                npm_runnable: npm_version.is_some(),
+                node_path_visible: node.is_some(),
+                npm_path_visible: npm.is_some(),
+                node_installations: node.into_iter().map(|p| p.display().to_string()).collect(),
+                npm_installations: npm.into_iter().map(|p| p.display().to_string()).collect(),
+                path: entries.iter().map(|p| p.display().to_string()).collect(),
+                available_disk_bytes,
+                managed_available_disk_bytes,
+                temporary_directory_access: system_access::path_access(&temporary_directory),
+                managed_install_directory_access: system_access::path_access(
+                    &managed_install_directory,
+                ),
+                managed_cache_directory_access: system_access::path_access(
+                    &managed_cache_directory,
+                ),
+            });
+        }
         #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-        let available_disk_bytes = 0;
-        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-        let temporary_directory_writable = false;
-        Ok(EnvironmentSnapshot {
-            platform,
-            architecture: if cfg!(target_arch = "aarch64") {
-                super::Architecture::Arm64
-            } else {
-                super::Architecture::X64
-            },
-            architecture_supported: true,
-            node_version: node_version.clone(),
-            npm_version: npm_version.clone(),
-            node_path: node.as_ref().map(|p| p.display().to_string()),
-            npm_path: npm.as_ref().map(|p| p.display().to_string()),
-            node_runnable: node_version.is_some(),
-            npm_runnable: npm_version.is_some(),
-            node_path_visible: node.is_some(),
-            npm_path_visible: npm.is_some(),
-            node_installations: node.into_iter().map(|p| p.display().to_string()).collect(),
-            npm_installations: npm.into_iter().map(|p| p.display().to_string()).collect(),
-            path: entries.iter().map(|p| p.display().to_string()).collect(),
-            available_disk_bytes,
-            temporary_directory_writable,
-            install_directory_writable: true,
-            npm_prefix_writable: true,
-            npm_cache_writable: true,
-        })
+        Err(failure(
+            InstallFailureCode::UnsupportedPlatform,
+            "native installer is limited to Windows and macOS",
+        ))
     }
 
     fn repair(&self, plan: &RepairPlan) -> Result<(), InstallFailure> {
@@ -784,6 +798,30 @@ impl OrchestratorRuntime for CommandRuntime {
             Err(error) => tool_failure(tool, &error.to_string()),
         }
     }
+}
+
+#[cfg(target_os = "windows")]
+fn managed_directories() -> Result<(PathBuf, PathBuf), InstallFailure> {
+    let base = dirs::data_local_dir().ok_or_else(|| {
+        failure(
+            InstallFailureCode::InstallerFailure,
+            "required local application data directory is unavailable",
+        )
+    })?;
+    let root = base.join("Agent-Manager");
+    Ok((root.join("npm"), root.join("cache").join("npm")))
+}
+
+#[cfg(target_os = "macos")]
+fn managed_directories() -> Result<(PathBuf, PathBuf), InstallFailure> {
+    let home = dirs::home_dir().ok_or_else(|| {
+        failure(
+            InstallFailureCode::InstallerFailure,
+            "required current-user home directory is unavailable",
+        )
+    })?;
+    let root = home.join(".agent-manager");
+    Ok((root.join("npm"), root.join("cache").join("npm")))
 }
 
 fn host_adapter() -> Option<Box<dyn super::PlatformAdapter>> {
@@ -1042,11 +1080,41 @@ mod tests {
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     #[test]
     fn production_snapshot_reports_measured_disk_space() {
+        let (managed_install_directory, managed_cache_directory) = managed_directories().unwrap();
+        let install_existed = managed_install_directory.exists();
+        let cache_existed = managed_cache_directory.exists();
         let snapshot = CommandRuntime.snapshot().unwrap();
 
         assert!(snapshot.available_disk_bytes > 0);
         assert!(snapshot.available_disk_bytes < u64::MAX);
-        assert!(snapshot.temporary_directory_writable);
+        assert!(snapshot.managed_available_disk_bytes > 0);
+        assert!(snapshot.managed_available_disk_bytes < u64::MAX);
+        assert_eq!(
+            snapshot.temporary_directory_access.path.as_deref(),
+            std::env::temp_dir().to_str()
+        );
+        assert_eq!(
+            snapshot.managed_install_directory_access.path.as_deref(),
+            managed_install_directory.to_str()
+        );
+        assert_eq!(
+            snapshot.managed_cache_directory_access.path.as_deref(),
+            managed_cache_directory.to_str()
+        );
+        assert_ne!(
+            snapshot.temporary_directory_access.state,
+            super::super::PathAccessState::Blocked
+        );
+        assert!(matches!(
+            snapshot.managed_install_directory_access.state,
+            super::super::PathAccessState::Writable | super::super::PathAccessState::NeedsCreation
+        ));
+        assert!(matches!(
+            snapshot.managed_cache_directory_access.state,
+            super::super::PathAccessState::Writable | super::super::PathAccessState::NeedsCreation
+        ));
+        assert_eq!(managed_install_directory.exists(), install_existed);
+        assert_eq!(managed_cache_directory.exists(), cache_existed);
     }
 
     #[test]

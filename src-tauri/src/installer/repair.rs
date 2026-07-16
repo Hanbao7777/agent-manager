@@ -1,6 +1,7 @@
 use super::{
     Architecture, EnvironmentSnapshot, InstallFailure, InstallFailureCode, InstallStage,
-    NodePolicy, Platform, RecommendedAction, RepairAction, RepairActionKind, RepairPlan,
+    NodePolicy, PathAccessState, Platform, RecommendedAction, RepairAction, RepairActionKind,
+    RepairPlan,
 };
 
 // Keep one GiB available for the Node installer, unpacking, and npm metadata.
@@ -29,7 +30,9 @@ pub fn build_repair_plan(
             "unsupported_architecture",
         ));
     }
-    if snapshot.available_disk_bytes < MINIMUM_DISK_BYTES {
+    if snapshot.available_disk_bytes < MINIMUM_DISK_BYTES
+        || snapshot.managed_available_disk_bytes < MINIMUM_DISK_BYTES
+    {
         return Err(failure(
             InstallFailureCode::InsufficientDiskSpace,
             RecommendedAction::FreeDiskSpace,
@@ -50,10 +53,9 @@ pub fn build_repair_plan(
             "multiple_npm_installations",
         ));
     }
-    if !snapshot.temporary_directory_writable
-        || !snapshot.install_directory_writable
-        || !snapshot.npm_prefix_writable
-        || !snapshot.npm_cache_writable
+    if !path_access_is_acceptable(&snapshot.temporary_directory_access.state)
+        || !path_access_is_acceptable(&snapshot.managed_install_directory_access.state)
+        || !path_access_is_acceptable(&snapshot.managed_cache_directory_access.state)
     {
         return Err(failure(
             InstallFailureCode::PermissionDenied,
@@ -111,6 +113,13 @@ pub fn build_repair_plan(
     }
 
     Ok(RepairPlan { actions })
+}
+
+fn path_access_is_acceptable(state: &PathAccessState) -> bool {
+    matches!(
+        state,
+        PathAccessState::Writable | PathAccessState::NeedsCreation | PathAccessState::NotApplicable
+    )
 }
 
 fn supported_node(version: Option<&str>, policy: &NodePolicy) -> bool {
@@ -271,7 +280,7 @@ mod tests {
     }
 
     #[test]
-    fn disk_threshold_is_inclusive() {
+    fn temporary_disk_threshold_is_independent_and_inclusive() {
         let mut snapshot = EnvironmentSnapshot::healthy_node("24.4.1", "11.4.2");
         snapshot.available_disk_bytes = MINIMUM_DISK_BYTES;
         assert!(build_repair_plan(&snapshot, &super::super::node_policy())
@@ -288,11 +297,43 @@ mod tests {
     }
 
     #[test]
-    fn permissions_fail_with_permission_denied() {
+    fn managed_disk_threshold_is_independent_and_inclusive() {
         let mut snapshot = EnvironmentSnapshot::healthy_node("24.4.1", "11.4.2");
-        snapshot.install_directory_writable = false;
-        let error = build_repair_plan(&snapshot, &super::super::node_policy()).unwrap_err();
-        assert_eq!(error.code, InstallFailureCode::PermissionDenied);
+        snapshot.managed_available_disk_bytes = MINIMUM_DISK_BYTES;
+        assert!(build_repair_plan(&snapshot, &super::super::node_policy())
+            .unwrap()
+            .actions
+            .is_empty());
+        snapshot.managed_available_disk_bytes = MINIMUM_DISK_BYTES - 1;
+        assert_eq!(
+            build_repair_plan(&snapshot, &super::super::node_policy())
+                .unwrap_err()
+                .code,
+            InstallFailureCode::InsufficientDiskSpace
+        );
+    }
+
+    #[test]
+    fn needs_creation_and_not_applicable_path_access_are_accepted() {
+        let mut snapshot = EnvironmentSnapshot::healthy_node("24.4.1", "11.4.2");
+        snapshot.temporary_directory_access.state = PathAccessState::NeedsCreation;
+        snapshot.managed_install_directory_access.state = PathAccessState::NeedsCreation;
+        snapshot.managed_cache_directory_access.state = PathAccessState::NotApplicable;
+
+        assert!(build_repair_plan(&snapshot, &super::super::node_policy())
+            .unwrap()
+            .actions
+            .is_empty());
+    }
+
+    #[test]
+    fn blocked_and_elevated_path_access_fail_with_permission_denied() {
+        for state in [PathAccessState::Blocked, PathAccessState::RequiresElevation] {
+            let mut snapshot = EnvironmentSnapshot::healthy_node("24.4.1", "11.4.2");
+            snapshot.managed_install_directory_access.state = state;
+            let error = build_repair_plan(&snapshot, &super::super::node_policy()).unwrap_err();
+            assert_eq!(error.code, InstallFailureCode::PermissionDenied);
+        }
     }
 
     #[test]

@@ -1,10 +1,13 @@
 use std::{
-    path::Path,
+    path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use super::{InstallFailure, InstallFailureCode, InstallStage, RecommendedAction};
+use super::{
+    InstallFailure, InstallFailureCode, InstallStage, PathAccess, PathAccessState,
+    RecommendedAction,
+};
 
 static PROBE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
@@ -96,6 +99,132 @@ pub(super) fn directory_writable(path: &Path) -> bool {
     std::fs::remove_file(probe_path).is_ok()
 }
 
+pub(super) fn path_access(path: &Path) -> PathAccess {
+    path_access_with(path, &directory_writable)
+}
+
+enum PathKind {
+    Directory,
+    Missing,
+    Other,
+    InspectionBlocked,
+}
+
+fn path_kind(path: &Path) -> PathKind {
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => PathKind::Directory,
+        Ok(_) => PathKind::Other,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            match std::fs::symlink_metadata(path) {
+                Ok(_) => PathKind::Other,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => PathKind::Missing,
+                Err(_) => PathKind::InspectionBlocked,
+            }
+        }
+        Err(_) => PathKind::InspectionBlocked,
+    }
+}
+
+fn path_access_with(path: &Path, writable: &dyn Fn(&Path) -> bool) -> PathAccess {
+    let path_value = Some(path.to_string_lossy().into_owned());
+    match path_kind(path) {
+        PathKind::Directory if writable(path) => PathAccess {
+            path: path_value,
+            state: PathAccessState::Writable,
+            detail: None,
+        },
+        PathKind::Directory => PathAccess {
+            path: path_value,
+            state: PathAccessState::Blocked,
+            detail: Some("existing directory failed the write probe".into()),
+        },
+        PathKind::Other => PathAccess {
+            path: path_value,
+            state: PathAccessState::Blocked,
+            detail: Some("path exists but is not a directory".into()),
+        },
+        PathKind::InspectionBlocked => PathAccess {
+            path: path_value,
+            state: PathAccessState::Blocked,
+            detail: Some("path metadata could not be inspected".into()),
+        },
+        PathKind::Missing => path_access_for_missing(path, path_value, writable),
+    }
+}
+
+fn path_access_for_missing(
+    path: &Path,
+    path_value: Option<String>,
+    writable: &dyn Fn(&Path) -> bool,
+) -> PathAccess {
+    let mut ancestor = path.parent();
+    while let Some(candidate) = ancestor {
+        match path_kind(candidate) {
+            PathKind::Directory if writable(candidate) => {
+                return PathAccess {
+                    path: path_value,
+                    state: PathAccessState::NeedsCreation,
+                    detail: Some(
+                        "target directory is missing and its nearest existing ancestor passed the write probe"
+                            .into(),
+                    ),
+                };
+            }
+            PathKind::Directory => {
+                return PathAccess {
+                    path: path_value,
+                    state: PathAccessState::Blocked,
+                    detail: Some("nearest existing ancestor failed the write probe".into()),
+                };
+            }
+            PathKind::Other => {
+                return PathAccess {
+                    path: path_value,
+                    state: PathAccessState::Blocked,
+                    detail: Some("nearest existing ancestor is not a directory".into()),
+                };
+            }
+            PathKind::InspectionBlocked => {
+                return PathAccess {
+                    path: path_value,
+                    state: PathAccessState::Blocked,
+                    detail: Some("nearest ancestor metadata could not be inspected".into()),
+                };
+            }
+            PathKind::Missing => ancestor = candidate.parent(),
+        }
+    }
+
+    PathAccess {
+        path: path_value,
+        state: PathAccessState::Blocked,
+        detail: Some("no existing directory ancestor is available".into()),
+    }
+}
+
+pub(super) fn nearest_existing_directory(path: &Path) -> Result<PathBuf, InstallFailure> {
+    let mut candidate = Some(path);
+    while let Some(current) = candidate {
+        match path_kind(current) {
+            PathKind::Directory => return Ok(current.to_path_buf()),
+            PathKind::Missing => candidate = current.parent(),
+            PathKind::Other => {
+                return Err(probe_failure(
+                    "disk measurement path exists but is not a directory",
+                ));
+            }
+            PathKind::InspectionBlocked => {
+                return Err(probe_failure(
+                    "disk measurement path metadata could not be inspected",
+                ));
+            }
+        }
+    }
+    Err(probe_failure(
+        "failed to locate an existing directory for disk measurement",
+    ))
+}
+
 fn probe_failure(detail: &str) -> InstallFailure {
     InstallFailure {
         code: InstallFailureCode::InstallerFailure,
@@ -112,6 +241,7 @@ fn probe_failure(detail: &str) -> InstallFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::installer::PathAccessState;
 
     #[test]
     fn writability_probe_accepts_a_directory_and_cleans_up() {
@@ -134,11 +264,101 @@ mod tests {
     }
 
     #[test]
+    fn path_access_accepts_a_writable_existing_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let entries_before = std::fs::read_dir(directory.path()).unwrap().count();
+
+        let access = path_access(directory.path());
+
+        assert_eq!(access.state, PathAccessState::Writable);
+        assert_eq!(access.path.as_deref(), directory.path().to_str());
+        assert!(access.detail.is_none());
+        assert_eq!(
+            std::fs::read_dir(directory.path()).unwrap().count(),
+            entries_before
+        );
+    }
+
+    #[test]
+    fn path_access_marks_a_missing_child_for_creation() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing = directory.path().join("parent").join("child");
+
+        let access = path_access(&missing);
+
+        assert_eq!(access.state, PathAccessState::NeedsCreation);
+        assert_eq!(access.path.as_deref(), missing.to_str());
+        assert_eq!(
+            access.detail.as_deref(),
+            Some(
+                "target directory is missing and its nearest existing ancestor passed the write probe"
+            )
+        );
+        assert!(!missing.exists());
+    }
+
+    #[test]
+    fn path_access_blocks_a_file_where_a_directory_is_expected() {
+        let directory = tempfile::tempdir().unwrap();
+        let file_path = directory.path().join("not-a-directory");
+        std::fs::write(&file_path, b"fixture").unwrap();
+
+        let access = path_access_with(&file_path, &|_| true);
+
+        assert_eq!(access.state, PathAccessState::Blocked);
+        assert_eq!(
+            access.detail.as_deref(),
+            Some("path exists but is not a directory")
+        );
+    }
+
+    #[test]
+    fn path_access_blocks_a_missing_target_when_ancestor_probe_fails() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing = directory.path().join("parent").join("child");
+
+        let access = path_access_with(&missing, &|_| false);
+
+        assert_eq!(access.state, PathAccessState::Blocked);
+        assert_eq!(
+            access.detail.as_deref(),
+            Some("nearest existing ancestor failed the write probe")
+        );
+    }
+
+    #[test]
     fn disk_probe_reports_a_measured_value() {
         let available = available_disk_bytes(&std::env::temp_dir()).unwrap();
 
         assert!(available > 0);
         assert!(available < u64::MAX);
+    }
+
+    #[test]
+    fn nearest_existing_directory_walks_only_through_missing_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing = directory.path().join("parent").join("child");
+
+        assert_eq!(
+            nearest_existing_directory(&missing).unwrap(),
+            directory.path()
+        );
+    }
+
+    #[test]
+    fn nearest_existing_directory_rejects_a_file_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let file_path = directory.path().join("not-a-directory");
+        std::fs::write(&file_path, b"fixture").unwrap();
+
+        let failure = nearest_existing_directory(&file_path).unwrap_err();
+
+        assert_eq!(failure.code, InstallFailureCode::InstallerFailure);
+        assert_eq!(failure.stage, InstallStage::Preflight);
+        assert_eq!(
+            failure.detail.as_deref(),
+            Some("disk measurement path exists but is not a directory")
+        );
     }
 
     #[test]

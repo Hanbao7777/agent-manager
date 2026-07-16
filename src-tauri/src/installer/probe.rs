@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::{Architecture, EnvironmentSnapshot, InstallFailure, Platform};
+use super::{Architecture, EnvironmentSnapshot, InstallFailure, PathAccess, Platform};
 
 /// Result of running a version command without exposing process details to the planner.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,7 +26,7 @@ pub trait ProbeRunner: Send + Sync {
     fn resolve_command(&self, name: &str) -> Vec<PathBuf>;
     fn run_version(&self, path: &Path) -> CommandProbe;
     fn disk_available(&self, path: &Path) -> Result<u64, InstallFailure>;
-    fn directory_writable(&self, path: &Path) -> bool;
+    fn path_access(&self, path: &Path) -> PathAccess;
 
     fn path_entries(&self) -> Vec<PathBuf> {
         Vec::new()
@@ -39,10 +39,10 @@ pub struct ProbeConfig {
     pub npm_command: String,
     pub path_entries: Vec<PathBuf>,
     pub disk_path: PathBuf,
+    pub managed_disk_path: PathBuf,
     pub temporary_directory: PathBuf,
-    pub install_directory: PathBuf,
-    pub npm_prefix_directory: PathBuf,
-    pub npm_cache_directory: PathBuf,
+    pub managed_install_directory: PathBuf,
+    pub managed_cache_directory: PathBuf,
 }
 
 impl ProbeConfig {
@@ -53,10 +53,10 @@ impl ProbeConfig {
             npm_command: "npm".into(),
             path_entries: Vec::new(),
             disk_path: target_directory.clone(),
+            managed_disk_path: target_directory.clone(),
             temporary_directory: target_directory.clone(),
-            install_directory: target_directory.clone(),
-            npm_prefix_directory: target_directory.clone(),
-            npm_cache_directory: target_directory,
+            managed_install_directory: target_directory.clone(),
+            managed_cache_directory: target_directory,
         }
     }
 }
@@ -124,18 +124,21 @@ impl<R: ProbeRunner> SystemProbe<R> {
                 .map(|path| path.to_string_lossy().into_owned())
                 .collect(),
             available_disk_bytes: self.runner.disk_available(&config.disk_path)?,
-            temporary_directory_writable: self
+            managed_available_disk_bytes: self.runner.disk_available(&config.managed_disk_path)?,
+            temporary_directory_access: self.runner.path_access(&config.temporary_directory),
+            managed_install_directory_access: self
                 .runner
-                .directory_writable(&config.temporary_directory),
-            install_directory_writable: self.runner.directory_writable(&config.install_directory),
-            npm_prefix_writable: self.runner.directory_writable(&config.npm_prefix_directory),
-            npm_cache_writable: self.runner.directory_writable(&config.npm_cache_directory),
+                .path_access(&config.managed_install_directory),
+            managed_cache_directory_access: self
+                .runner
+                .path_access(&config.managed_cache_directory),
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::PathAccessState;
     use super::*;
 
     struct FakeRunner {
@@ -172,9 +175,18 @@ mod tests {
             Ok(2 * 1024 * 1024 * 1024)
         }
 
-        fn directory_writable(&self, path: &Path) -> bool {
+        fn path_access(&self, path: &Path) -> PathAccess {
             let value = path.to_string_lossy();
-            !self.blocked.iter().any(|blocked| value.contains(blocked))
+            let state = if self.blocked.iter().any(|blocked| value.contains(blocked)) {
+                PathAccessState::Blocked
+            } else {
+                PathAccessState::Writable
+            };
+            PathAccess {
+                path: Some(value.into_owned()),
+                state,
+                detail: None,
+            }
         }
 
         fn path_entries(&self) -> Vec<PathBuf> {
@@ -195,9 +207,8 @@ mod tests {
         config.npm_command = "npm-custom".into();
         config.path_entries = vec![PathBuf::from("C:/path-one"), PathBuf::from("C:/path-two")];
         config.temporary_directory = PathBuf::from("C:/temp");
-        config.install_directory = PathBuf::from("C:/install");
-        config.npm_prefix_directory = PathBuf::from("C:/prefix");
-        config.npm_cache_directory = PathBuf::from("C:/cache");
+        config.managed_install_directory = PathBuf::from("C:/install");
+        config.managed_cache_directory = PathBuf::from("C:/cache");
         let snapshot = SystemProbe::new(runner)
             .probe_with_config(Platform::Windows, Architecture::X64, &config)
             .unwrap();
@@ -213,10 +224,22 @@ mod tests {
         assert!(snapshot.npm_path_visible);
         assert_eq!(snapshot.path.len(), 2);
         assert_eq!(snapshot.available_disk_bytes, 2 * 1024 * 1024 * 1024);
-        assert!(snapshot.temporary_directory_writable);
-        assert!(snapshot.install_directory_writable);
-        assert!(snapshot.npm_prefix_writable);
-        assert!(snapshot.npm_cache_writable);
+        assert_eq!(
+            snapshot.managed_available_disk_bytes,
+            2 * 1024 * 1024 * 1024
+        );
+        assert_eq!(
+            snapshot.temporary_directory_access.state,
+            PathAccessState::Writable
+        );
+        assert_eq!(
+            snapshot.managed_install_directory_access.state,
+            PathAccessState::Writable
+        );
+        assert_eq!(
+            snapshot.managed_cache_directory_access.state,
+            PathAccessState::Writable
+        );
     }
 
     #[test]
@@ -241,8 +264,12 @@ mod tests {
                     detail: Some("disk probe failed".into()),
                 })
             }
-            fn directory_writable(&self, _path: &Path) -> bool {
-                true
+            fn path_access(&self, path: &Path) -> PathAccess {
+                PathAccess {
+                    path: Some(path.to_string_lossy().into_owned()),
+                    state: PathAccessState::Writable,
+                    detail: None,
+                }
             }
         }
         let error = SystemProbe::new(ErrorRunner)
@@ -279,15 +306,22 @@ mod tests {
         };
         let mut config = ProbeConfig::new("C:/disk");
         config.temporary_directory = PathBuf::from("C:/blocked-temp");
-        config.install_directory = PathBuf::from("C:/install");
-        config.npm_prefix_directory = PathBuf::from("C:/prefix");
-        config.npm_cache_directory = PathBuf::from("C:/cache");
+        config.managed_install_directory = PathBuf::from("C:/install");
+        config.managed_cache_directory = PathBuf::from("C:/cache");
         let snapshot = SystemProbe::new(runner)
             .probe_with_config(Platform::Windows, Architecture::X64, &config)
             .unwrap();
-        assert!(!snapshot.temporary_directory_writable);
-        assert!(snapshot.install_directory_writable);
-        assert!(snapshot.npm_prefix_writable);
-        assert!(snapshot.npm_cache_writable);
+        assert_eq!(
+            snapshot.temporary_directory_access.state,
+            PathAccessState::Blocked
+        );
+        assert_eq!(
+            snapshot.managed_install_directory_access.state,
+            PathAccessState::Writable
+        );
+        assert_eq!(
+            snapshot.managed_cache_directory_access.state,
+            PathAccessState::Writable
+        );
     }
 }

@@ -14,6 +14,23 @@ pub enum Architecture {
     Arm64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PathAccessState {
+    Writable,
+    NeedsCreation,
+    RequiresElevation,
+    Blocked,
+    NotApplicable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PathAccess {
+    pub path: Option<String>,
+    pub state: PathAccessState,
+    pub detail: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolId {
@@ -132,10 +149,10 @@ pub struct EnvironmentSnapshot {
     pub npm_installations: Vec<String>,
     pub path: Vec<String>,
     pub available_disk_bytes: u64,
-    pub temporary_directory_writable: bool,
-    pub install_directory_writable: bool,
-    pub npm_prefix_writable: bool,
-    pub npm_cache_writable: bool,
+    pub managed_available_disk_bytes: u64,
+    pub temporary_directory_access: PathAccess,
+    pub managed_install_directory_access: PathAccess,
+    pub managed_cache_directory_access: PathAccess,
 }
 
 impl EnvironmentSnapshot {
@@ -156,10 +173,22 @@ impl EnvironmentSnapshot {
             npm_installations: Vec::new(),
             path: Vec::new(),
             available_disk_bytes: u64::MAX,
-            temporary_directory_writable: true,
-            install_directory_writable: true,
-            npm_prefix_writable: true,
-            npm_cache_writable: true,
+            managed_available_disk_bytes: u64::MAX,
+            temporary_directory_access: PathAccess {
+                path: None,
+                state: PathAccessState::Writable,
+                detail: None,
+            },
+            managed_install_directory_access: PathAccess {
+                path: None,
+                state: PathAccessState::Writable,
+                detail: None,
+            },
+            managed_cache_directory_access: PathAccess {
+                path: None,
+                state: PathAccessState::Writable,
+                detail: None,
+            },
         }
     }
 
@@ -180,10 +209,22 @@ impl EnvironmentSnapshot {
             npm_installations: Vec::new(),
             path: Vec::new(),
             available_disk_bytes: u64::MAX,
-            temporary_directory_writable: true,
-            install_directory_writable: true,
-            npm_prefix_writable: true,
-            npm_cache_writable: true,
+            managed_available_disk_bytes: u64::MAX,
+            temporary_directory_access: PathAccess {
+                path: None,
+                state: PathAccessState::Writable,
+                detail: None,
+            },
+            managed_install_directory_access: PathAccess {
+                path: None,
+                state: PathAccessState::Writable,
+                detail: None,
+            },
+            managed_cache_directory_access: PathAccess {
+                path: None,
+                state: PathAccessState::Writable,
+                detail: None,
+            },
         }
     }
 }
@@ -296,7 +337,8 @@ pub enum InstallTaskEvent {
 mod tests {
     use super::{
         ActionStatus, Architecture, EnvironmentSnapshot, InstallFailureCode, InstallStage,
-        InstallTaskEvent, Platform, RecommendedAction, RepairAction, RepairActionKind, ToolId,
+        InstallTaskEvent, PathAccess, PathAccessState, Platform, RecommendedAction, RepairAction,
+        RepairActionKind, ToolId,
     };
 
     #[test]
@@ -403,6 +445,41 @@ mod tests {
     }
 
     #[test]
+    fn path_access_types_serialize_with_stable_wire_names_and_shape() {
+        let states = [
+            PathAccessState::Writable,
+            PathAccessState::NeedsCreation,
+            PathAccessState::RequiresElevation,
+            PathAccessState::Blocked,
+            PathAccessState::NotApplicable,
+        ];
+        assert_eq!(
+            serde_json::to_value(states).unwrap(),
+            serde_json::json!([
+                "writable",
+                "needs_creation",
+                "requires_elevation",
+                "blocked",
+                "not_applicable"
+            ])
+        );
+
+        let access = PathAccess {
+            path: Some("managed/npm".into()),
+            state: PathAccessState::NeedsCreation,
+            detail: Some("nearest existing ancestor is writable".into()),
+        };
+        assert_eq!(
+            serde_json::to_value(access).unwrap(),
+            serde_json::json!({
+                "path": "managed/npm",
+                "state": "needs_creation",
+                "detail": "nearest existing ancestor is writable"
+            })
+        );
+    }
+
+    #[test]
     fn environment_snapshot_carries_repair_planner_inputs() {
         let mut snapshot = EnvironmentSnapshot::without_node(Platform::Windows, Architecture::X64);
         snapshot.architecture_supported = false;
@@ -411,14 +488,19 @@ mod tests {
         snapshot.node_path_visible = false;
         snapshot.node_installations = vec!["C:\\node-a".into(), "C:\\node-b".into()];
         snapshot.available_disk_bytes = 1024;
-        snapshot.install_directory_writable = false;
+        snapshot.managed_available_disk_bytes = 2048;
+        snapshot.managed_install_directory_access.state = PathAccessState::Blocked;
 
         assert!(!snapshot.architecture_supported);
         assert!(!snapshot.node_runnable);
         assert!(!snapshot.node_path_visible);
         assert_eq!(snapshot.node_installations.len(), 2);
         assert_eq!(snapshot.available_disk_bytes, 1024);
-        assert!(!snapshot.install_directory_writable);
+        assert_eq!(snapshot.managed_available_disk_bytes, 2048);
+        assert_eq!(
+            snapshot.managed_install_directory_access.state,
+            PathAccessState::Blocked
+        );
     }
 
     #[test]
