@@ -2,15 +2,14 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DiagnosticReportDialog } from "./DiagnosticReportDialog";
 
-const { generate, exportReport, openIssue, toastSuccess, toastError } = vi.hoisted(
-  () => ({
+const { generate, exportReport, openIssue, toastSuccess, toastError } =
+  vi.hoisted(() => ({
     generate: vi.fn(),
     exportReport: vi.fn(),
     openIssue: vi.fn(),
     toastSuccess: vi.fn(),
     toastError: vi.fn(),
-  }),
-);
+  }));
 
 vi.mock("@/lib/api", () => ({
   diagnosticsApi: { generate, export: exportReport, openIssue },
@@ -55,7 +54,9 @@ describe("DiagnosticReportDialog", () => {
     render(<DiagnosticReportDialog tools={tools} />);
 
     fireEvent.click(screen.getByText("settings.diagnostics.create"));
-    expect(screen.queryByText("settings.diagnostics.send")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("settings.diagnostics.send"),
+    ).not.toBeInTheDocument();
     expect(openIssue).not.toHaveBeenCalled();
 
     fireEvent.change(
@@ -71,7 +72,9 @@ describe("DiagnosticReportDialog", () => {
       tools,
     });
     expect(openIssue).not.toHaveBeenCalled();
-    expect(screen.getByText("settings.diagnostics.reviewNotice")).toBeInTheDocument();
+    expect(
+      screen.getByText("settings.diagnostics.reviewNotice"),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByText("settings.diagnostics.send"));
     await waitFor(() => expect(openIssue).toHaveBeenCalledWith("diagnostic-1"));
@@ -89,7 +92,9 @@ describe("DiagnosticReportDialog", () => {
     fireEvent.click(screen.getByText("settings.diagnostics.preview"));
     await screen.findByText("settings.diagnostics.blocked.oversized");
 
-    expect(screen.queryByText("settings.diagnostics.send")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("settings.diagnostics.send"),
+    ).not.toBeInTheDocument();
     expect(openIssue).not.toHaveBeenCalled();
     fireEvent.change(
       screen.getByPlaceholderText("settings.diagnostics.exportPlaceholder"),
@@ -103,9 +108,7 @@ describe("DiagnosticReportDialog", () => {
         "C:\\Users\\Alice\\report.json",
       ),
     );
-    expect(toastSuccess).toHaveBeenCalledWith(
-      "settings.diagnostics.exported",
-    );
+    expect(toastSuccess).toHaveBeenCalledWith("settings.diagnostics.exported");
   });
 
   it("shows localized feedback when public issue opening fails", async () => {

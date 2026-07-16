@@ -22,9 +22,7 @@ interface DiagnosticReportDialogProps {
   tools: DiagnosticToolInput[];
 }
 
-export function DiagnosticReportDialog({
-  tools,
-}: DiagnosticReportDialogProps) {
+export function DiagnosticReportDialog({ tools }: DiagnosticReportDialogProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [summary, setSummary] = useState("");
