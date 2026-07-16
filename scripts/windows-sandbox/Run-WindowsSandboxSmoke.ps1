@@ -67,6 +67,18 @@ function Save-Screenshot([string]$Path) {
     } finally { $bitmap.Dispose() }
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw 'Screenshot was not created.' }
 }
+function Assert-AgentManagerWindow($Process, [string]$EvidenceStem) {
+    $Process.Refresh()
+    if ($Process.HasExited) { throw "Agent Manager exited with code $($Process.ExitCode)." }
+    if ($Process.MainWindowHandle -eq 0 -or [string]::IsNullOrWhiteSpace($Process.MainWindowTitle)) { throw 'Agent Manager window is not visible.' }
+    $screenshotName = "$EvidenceStem-render.png"
+    Save-Screenshot (Join-Path $evidence $screenshotName)
+    if ($Process.MainWindowTitle -cne 'Agent Manager') {
+        New-Record "$EvidenceStem-render.json" ([ordered]@{ process_id = $Process.Id; window_title = $Process.MainWindowTitle; launched = $true; rendered = $false; screenshot = $screenshotName; failure = 'unexpected-window-title' })
+        throw "Unexpected Agent Manager window title: $($Process.MainWindowTitle)"
+    }
+    New-Record "$EvidenceStem-render.json" ([ordered]@{ process_id = $Process.Id; window_title = $Process.MainWindowTitle; launched = $true; rendered = $true; screenshot = $screenshotName })
+}
 function Complete-Run([array]$Steps, [string]$Status, [string]$ManifestHash) {
     New-Record 'steps.json' $Steps
     New-Record 'complete.json' ([ordered]@{
@@ -122,14 +134,22 @@ $steps += Invoke-Step 'offline-webview2-prerequisite' {
             if ($version -and $version -ne '0.0.0.0') { $version }
         }
     } | Select-Object -First 1
-    if ($runtimeVersion) { New-Record 'webview2.json' ([ordered]@{ status = 'already-installed'; version = $runtimeVersion }) }
-    elseif (-not (Test-Path -LiteralPath $installer)) { throw 'WebView2 runtime is absent and no staged installer exists.' }
-    else {
+    $runtimeExecutable = @(
+        (Join-Path ${env:ProgramFiles(x86)} 'Microsoft\EdgeWebView\Application'),
+        (Join-Path $env:LOCALAPPDATA 'Microsoft\EdgeWebView\Application')
+    ) | Where-Object { Test-Path -LiteralPath $_ -PathType Container } | ForEach-Object {
+        Get-ChildItem -LiteralPath $_ -Filter 'msedgewebview2.exe' -Recurse -File -ErrorAction SilentlyContinue
+    } | Select-Object -First 1
+    if (Test-Path -LiteralPath $installer -PathType Leaf) {
         $signature = Get-AuthenticodeSignature -LiteralPath $installer
         if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Microsoft') { throw 'WebView2 Authenticode signature is not a valid Microsoft signature.' }
         $p = Start-Process -FilePath $installer -ArgumentList @('/silent','/install') -Wait -PassThru -NoNewWindow
         if ($p.ExitCode -notin @(0, 1638)) { throw "WebView2 installer exit $($p.ExitCode)" }
-        New-Record 'webview2.json' ([ordered]@{ status = 'installed'; exit_code = $p.ExitCode })
+        New-Record 'webview2.json' ([ordered]@{ status = 'installer-ran'; detected_version = $runtimeVersion; detected_executable = if ($runtimeExecutable) { $runtimeExecutable.FullName } else { $null }; exit_code = $p.ExitCode })
+    } elseif ($runtimeVersion -and $runtimeExecutable) {
+        New-Record 'webview2.json' ([ordered]@{ status = 'already-installed'; version = $runtimeVersion; executable = $runtimeExecutable.FullName })
+    } else {
+        throw 'WebView2 runtime is not usable and no staged installer exists.'
     }
 }
 $webviewGate = $steps[-1]
@@ -145,11 +165,7 @@ $steps += Invoke-Step 'msi-launch-render-evidence' {
     $p = Start-Process -FilePath $app -PassThru
     try {
         Start-Sleep -Seconds 5
-        $p.Refresh()
-        if ($p.HasExited) { throw "Installed application exited with code $($p.ExitCode)." }
-        if ($p.MainWindowHandle -eq 0 -or [string]::IsNullOrWhiteSpace($p.MainWindowTitle)) { throw 'Installed Agent Manager window is not visible.' }
-        Save-Screenshot (Join-Path $evidence 'msi-render.png')
-        New-Record 'msi-render.json' ([ordered]@{ process_id = $p.Id; window_title = $p.MainWindowTitle; launched = $true; rendered = $true; screenshot = 'msi-render.png' })
+        Assert-AgentManagerWindow $p 'msi'
     } finally {
         $p.Refresh()
         if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
@@ -170,11 +186,7 @@ $steps += Invoke-Step 'portable-launch-render-evidence' {
     $p = Start-Process -FilePath $app.FullName -PassThru
     try {
         Start-Sleep -Seconds 5
-        $p.Refresh()
-        if ($p.HasExited) { throw "Portable application exited with code $($p.ExitCode)." }
-        if ($p.MainWindowHandle -eq 0 -or [string]::IsNullOrWhiteSpace($p.MainWindowTitle)) { throw 'Portable Agent Manager window is not visible.' }
-        Save-Screenshot (Join-Path $evidence 'portable-render.png')
-        New-Record 'portable-render.json' ([ordered]@{ process_id = $p.Id; window_title = $p.MainWindowTitle; launched = $true; rendered = $true; screenshot = 'portable-render.png' })
+        Assert-AgentManagerWindow $p 'portable'
     } finally {
         $p.Refresh()
         if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }

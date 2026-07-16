@@ -44,6 +44,9 @@ Describe 'Windows Sandbox smoke harness static contract' {
         $text | Should Match 'HKCU:'
         $text | Should Match "-Name 'pv'"
         $text | Should Match "0\.0\.0\.0"
+        $text | Should Match 'msedgewebview2\.exe'
+        $text | Should Match 'if \(Test-Path -LiteralPath \$installer -PathType Leaf\)'
+        $text | Should Match "status = 'installer-ran'"
         $text | Should Not Match 'F1E7E8E1'
     }
     It 'recomputes the manifest payload hash independently before the artifact gate' {
@@ -58,5 +61,11 @@ Describe 'Windows Sandbox smoke harness static contract' {
         $text | Should Match 'IO\.Compression\.ZipFile\]::OpenRead'
         $text | Should Match 'StartsWith\(\$destinationPrefix, \[StringComparison\]::OrdinalIgnoreCase\)'
         $text | Should Match 'ZipFileExtensions\]::ExtractToFile'
+    }
+    It 'rejects an error dialog as render evidence' {
+        $text = Get-Content (Join-Path $root 'Run-WindowsSandboxSmoke.ps1') -Raw
+        $text | Should Match "MainWindowTitle -cne 'Agent Manager'"
+        $text | Should Match "failure = 'unexpected-window-title'"
+        $text | Should Match 'rendered = \$false'
     }
 }
