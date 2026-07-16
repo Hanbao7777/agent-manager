@@ -714,13 +714,17 @@ fn clean_environment(
             &format!("failed to construct clean process PATH: {error}"),
         )
     })?;
-    let mut values = vec![(OsString::from("PATH"), path)];
+    let values = vec![(OsString::from("PATH"), path)];
     #[cfg(target_os = "windows")]
-    for name in ["SYSTEMROOT", "COMSPEC"] {
-        if let Some(value) = std::env::var_os(name) {
-            values.push((OsString::from(name), value));
+    let values = {
+        let mut values = values;
+        for name in ["SYSTEMROOT", "COMSPEC"] {
+            if let Some(value) = std::env::var_os(name) {
+                values.push((OsString::from(name), value));
+            }
         }
-    }
+        values
+    };
     Ok(ProcessEnvironment { values })
 }
 
@@ -985,7 +989,8 @@ fn previous_active_version<F: ManagedFilesystem>(
         return Ok(None);
     }
     if filesystem.inspect(entry_point)? == PathState::File {
-        let contents = String::from_utf8_lossy(&filesystem.read(entry_point)?);
+        let entry_point_bytes = filesystem.read(entry_point)?;
+        let contents = String::from_utf8_lossy(&entry_point_bytes);
         for version in &entries {
             let candidate = staged_executable(&versions_root.join(version), executable, platform);
             if contents.contains(candidate.to_string_lossy().as_ref()) {
