@@ -5,6 +5,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
 };
 
 use super::{
@@ -14,6 +15,7 @@ use super::{
 };
 
 const MANAGED_CACHE_CAP_BYTES: u64 = 500 * 1024 * 1024;
+const MANAGED_NPM_INSTALL_ATTEMPTS: usize = 3;
 const CACHE_OWNERSHIP_MARKER: &str = ".agent-manager-owned";
 const CACHE_OWNERSHIP_CONTENTS: &[u8] = b"Agent Manager managed npm cache\n";
 static STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
@@ -546,6 +548,12 @@ where
     enforce_cache_cap(filesystem, &request.cache_root)?;
     let base_environment = prepare_clean_environment(filesystem, request, None)?;
     validate_version_component(&version)?;
+    let required_platform_package = required_platform_package_spec(
+        request.tool,
+        &request.platform,
+        std::env::consts::ARCH,
+        &version,
+    )?;
 
     let versions_root = request
         .managed_root
@@ -594,40 +602,27 @@ where
             .join(format!("{version}-{}-{sequence}", std::process::id()));
         create_safe_directory(filesystem, &request.managed_root, &staging_directory)?;
         let package_version = format!("{}@{version}", request.tool.package);
+        let mut install_args = vec![
+            OsString::from("install"),
+            OsString::from("--global"),
+            OsString::from("--no-audit"),
+            OsString::from("--no-fund"),
+            OsString::from("--prefix"),
+            staging_directory.clone().into_os_string(),
+            OsString::from("--cache"),
+            request.cache_root.clone().into_os_string(),
+            OsString::from(package_version),
+        ];
+        if let Some(package) = required_platform_package {
+            install_args.push(OsString::from(package));
+        }
         let install_spec = ProcessSpec {
             program: request.npm_path.clone(),
-            args: vec![
-                OsString::from("install"),
-                OsString::from("--global"),
-                OsString::from("--no-audit"),
-                OsString::from("--no-fund"),
-                OsString::from("--prefix"),
-                staging_directory.clone().into_os_string(),
-                OsString::from("--cache"),
-                request.cache_root.clone().into_os_string(),
-                OsString::from(package_version),
-            ],
+            args: install_args,
             environment: base_environment,
             clear_environment: true,
         };
-        let install_output = match runner.run(&install_spec) {
-            Ok(output) => output,
-            Err(error) => {
-                cleanup_failed_staging(filesystem, &staging_directory);
-                return Err(failure_after_cache_cleanup(
-                    filesystem,
-                    &request.cache_root,
-                    error,
-                ));
-            }
-        };
-        if install_output.exit_code != Some(0) {
-            let failure = classify_process_failure(
-                InstallStage::InstallingTools,
-                install_output.exit_code,
-                &install_output.stdout,
-                &install_output.stderr,
-            );
+        if let Err(failure) = run_managed_npm_install(runner, &install_spec) {
             cleanup_failed_staging(filesystem, &staging_directory);
             return Err(failure_after_cache_cleanup(
                 filesystem,
@@ -683,6 +678,69 @@ where
         &request.platform,
     )?;
     Ok((version, entry_point))
+}
+
+fn required_platform_package_spec(
+    tool: ManagedNpmTool,
+    platform: &Platform,
+    architecture: &str,
+    version: &str,
+) -> Result<Option<String>, InstallFailure> {
+    if tool.tool != ToolId::Codex {
+        return Ok(None);
+    }
+    let platform = match platform {
+        Platform::Windows => "win32",
+        Platform::Macos => "darwin",
+    };
+    let architecture = match architecture {
+        "x86_64" => "x64",
+        "aarch64" => "arm64",
+        _ => return Err(allowlist_failure("unsupported Codex platform architecture")),
+    };
+    Ok(Some(format!(
+        "@openai/codex-{platform}-{architecture}@npm:@openai/codex@{version}-{platform}-{architecture}"
+    )))
+}
+
+fn run_managed_npm_install<P: ProcessRunner>(
+    runner: &P,
+    spec: &ProcessSpec,
+) -> Result<(), InstallFailure> {
+    for attempt in 0..MANAGED_NPM_INSTALL_ATTEMPTS {
+        let result = runner.run(spec).and_then(|output| {
+            if output.exit_code == Some(0) {
+                Ok(())
+            } else {
+                Err(classify_process_failure(
+                    InstallStage::InstallingTools,
+                    output.exit_code,
+                    &output.stdout,
+                    &output.stderr,
+                ))
+            }
+        });
+        match result {
+            Ok(()) => return Ok(()),
+            Err(error)
+                if attempt + 1 < MANAGED_NPM_INSTALL_ATTEMPTS
+                    && is_transient_npm_download_failure(&error) =>
+            {
+                std::thread::sleep(Duration::from_millis(100 * (attempt as u64 + 1)));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("the managed npm retry loop always returns")
+}
+
+fn is_transient_npm_download_failure(error: &InstallFailure) -> bool {
+    matches!(
+        error.code,
+        InstallFailureCode::DnsFailure
+            | InstallFailureCode::NetworkTimeout
+            | InstallFailureCode::ProxyUnreachable
+    )
 }
 
 fn prepare_clean_environment<F: ManagedFilesystem>(
@@ -1251,7 +1309,7 @@ fn fs_failure(stage: InstallStage, detail: &str) -> InstallFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{atomic::AtomicUsize, Arc, Mutex};
 
     static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
@@ -1325,6 +1383,45 @@ mod tests {
         }
     }
 
+    struct FlakyInstallRunner {
+        platform: Platform,
+        executable: &'static str,
+        reported_version: String,
+        failures_before_success: usize,
+        failure_stderr: &'static str,
+        attempts: AtomicUsize,
+    }
+
+    impl ProcessRunner for FlakyInstallRunner {
+        fn run(&self, spec: &ProcessSpec) -> Result<ProcessOutput, InstallFailure> {
+            if spec.args.first() == Some(&OsString::from("install")) {
+                let attempt = self.attempts.fetch_add(1, Ordering::Relaxed);
+                if attempt < self.failures_before_success {
+                    return Ok(ProcessOutput {
+                        exit_code: Some(1),
+                        stdout: String::new(),
+                        stderr: self.failure_stderr.into(),
+                    });
+                }
+                let prefix_index = spec.args.iter().position(|arg| arg == "--prefix").unwrap();
+                let prefix = PathBuf::from(spec.args[prefix_index + 1].clone());
+                let executable = staged_executable(&prefix, self.executable, &self.platform);
+                std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
+                std::fs::write(executable, b"fake executable").unwrap();
+                return Ok(ProcessOutput {
+                    exit_code: Some(0),
+                    stdout: String::new(),
+                    stderr: String::new(),
+                });
+            }
+            Ok(ProcessOutput {
+                exit_code: Some(0),
+                stdout: self.reported_version.clone(),
+                stderr: String::new(),
+            })
+        }
+    }
+
     fn request(root: &TestDirectory, version_tool: ToolId) -> ManagedNpmRequest {
         ManagedNpmRequest {
             tool: ManagedNpmTool::from_tool(version_tool).unwrap(),
@@ -1376,6 +1473,32 @@ mod tests {
     }
 
     #[test]
+    fn codex_platform_package_is_an_explicit_allowlisted_dependency() {
+        let tool = ManagedNpmTool::from_tool(ToolId::Codex).unwrap();
+        assert_eq!(
+            required_platform_package_spec(tool, &Platform::Windows, "x86_64", "1.2.3")
+                .unwrap()
+                .as_deref(),
+            Some("@openai/codex-win32-x64@npm:@openai/codex@1.2.3-win32-x64")
+        );
+        assert_eq!(
+            required_platform_package_spec(tool, &Platform::Macos, "aarch64", "1.2.3")
+                .unwrap()
+                .as_deref(),
+            Some("@openai/codex-darwin-arm64@npm:@openai/codex@1.2.3-darwin-arm64")
+        );
+        assert!(required_platform_package_spec(tool, &Platform::Windows, "mips", "1.2.3").is_err());
+        assert!(required_platform_package_spec(
+            ManagedNpmTool::from_tool(ToolId::Gemini).unwrap(),
+            &Platform::Windows,
+            "mips",
+            "1.2.3"
+        )
+        .unwrap()
+        .is_none());
+    }
+
+    #[test]
     fn resolves_latest_once_and_persists_the_exact_version() {
         let root = TestDirectory::new("single-resolution");
         let (result, resolver, specs) = install(&root, "2.3.4", "2.3.4", true);
@@ -1406,7 +1529,78 @@ mod tests {
         assert_eq!(install.program, root.0.join("runtime/npm.cmd"));
         assert!(install.args.iter().any(|arg| arg == "--prefix"));
         assert!(install.args.iter().any(|arg| arg == "--cache"));
-        assert_eq!(install.args.last().unwrap(), "@openai/codex@1.2.3");
+        assert!(install.args.iter().any(|arg| arg == "@openai/codex@1.2.3"));
+        assert_eq!(
+            install.args.last().unwrap(),
+            &OsString::from(
+                required_platform_package_spec(
+                    ManagedNpmTool::from_tool(ToolId::Codex).unwrap(),
+                    &Platform::Windows,
+                    std::env::consts::ARCH,
+                    "1.2.3"
+                )
+                .unwrap()
+                .unwrap()
+            )
+        );
+    }
+
+    #[test]
+    fn transient_npm_download_failures_retry_three_total_attempts() {
+        let root = TestDirectory::new("transient-retry");
+        let resolver = FakeResolver {
+            version: "1.2.3".into(),
+            calls: Mutex::new(Vec::new()),
+        };
+        let runner = FlakyInstallRunner {
+            platform: Platform::Windows,
+            executable: "codex",
+            reported_version: "1.2.3".into(),
+            failures_before_success: 2,
+            failure_stderr: "npm ERR! code ETIMEDOUT",
+            attempts: AtomicUsize::new(0),
+        };
+
+        let result = install_managed_npm_with(
+            &resolver,
+            &runner,
+            &StdManagedFilesystem,
+            request(&root, ToolId::Codex),
+        );
+
+        assert_eq!(result.status, ToolInstallStatus::Succeeded);
+        assert_eq!(runner.attempts.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn npm_integrity_failure_does_not_retry() {
+        let root = TestDirectory::new("integrity-no-retry");
+        let resolver = FakeResolver {
+            version: "1.2.3".into(),
+            calls: Mutex::new(Vec::new()),
+        };
+        let runner = FlakyInstallRunner {
+            platform: Platform::Windows,
+            executable: "codex",
+            reported_version: "1.2.3".into(),
+            failures_before_success: 1,
+            failure_stderr: "npm ERR! code EINTEGRITY integrity checksum failed",
+            attempts: AtomicUsize::new(0),
+        };
+
+        let result = install_managed_npm_with(
+            &resolver,
+            &runner,
+            &StdManagedFilesystem,
+            request(&root, ToolId::Codex),
+        );
+
+        assert_eq!(result.status, ToolInstallStatus::Failed);
+        assert_eq!(runner.attempts.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            result.failure.unwrap().code,
+            InstallFailureCode::DownloadIntegrityFailure
+        );
     }
 
     #[test]
