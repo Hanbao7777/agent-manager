@@ -8,11 +8,12 @@ use std::{
 
 use super::{
     aggregate_tool_outcomes, build_repair_plan, next_sequence_from_task_ids, node_policy,
-    parse_command_version_output, replace_file, resolve_pair_with_refresh, unique_temporary_path,
-    AggregatedTaskStatus, CleanEnvironment, ConfirmedInstallRequest, EnvironmentSnapshot,
-    InstallFailure, InstallFailureCode, InstallPreparation, InstallRequest, InstallStage,
-    InstallTaskResult, InstallTaskSnapshot, InstallTaskStatus, PairSource, RecommendedAction,
-    RepairPlan, ResolvedNodeNpmPair, ToolId, ToolInstallResult, ToolInstallStatus, ToolOutcome,
+    parse_command_version_output, replace_file, resolve_pair_with_refresh, system_access,
+    unique_temporary_path, AggregatedTaskStatus, CleanEnvironment, ConfirmedInstallRequest,
+    EnvironmentSnapshot, InstallFailure, InstallFailureCode, InstallPreparation, InstallRequest,
+    InstallStage, InstallTaskResult, InstallTaskSnapshot, InstallTaskStatus, PairSource,
+    RecommendedAction, RepairPlan, ResolvedNodeNpmPair, ToolId, ToolInstallResult,
+    ToolInstallStatus, ToolOutcome,
 };
 
 use std::{
@@ -613,56 +614,6 @@ fn terminal_events(task: &InstallTaskSnapshot) -> Vec<super::InstallTaskEvent> {
 /// an unapproved fallback installer.
 pub struct CommandRuntime;
 
-#[cfg(target_os = "windows")]
-fn available_disk_bytes(path: &Path) -> Result<u64, InstallFailure> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
-
-    let wide_path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-    let mut available_to_caller = 0_u64;
-    let succeeded = unsafe {
-        GetDiskFreeSpaceExW(
-            wide_path.as_ptr(),
-            &mut available_to_caller,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-        )
-    };
-    if succeeded == 0 {
-        return Err(failure(
-            InstallFailureCode::InstallerFailure,
-            &format!(
-                "failed to measure available disk space: {}",
-                std::io::Error::last_os_error()
-            ),
-        ));
-    }
-    Ok(available_to_caller)
-}
-
-#[cfg(target_os = "windows")]
-fn directory_writable(path: &Path) -> bool {
-    static PROBE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
-
-    if !path.is_dir() {
-        return false;
-    }
-    let probe_path = path.join(format!(
-        ".agent-manager-write-probe-{}-{}",
-        std::process::id(),
-        PROBE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-    ));
-    let created = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&probe_path);
-    let Ok(file) = created else {
-        return false;
-    };
-    drop(file);
-    std::fs::remove_file(probe_path).is_ok()
-}
-
 impl OrchestratorRuntime for CommandRuntime {
     fn snapshot(&self) -> Result<EnvironmentSnapshot, InstallFailure> {
         let path = std::env::var_os("PATH").unwrap_or_default();
@@ -681,14 +632,14 @@ impl OrchestratorRuntime for CommandRuntime {
                 "native installer is limited to Windows and macOS",
             ));
         };
-        #[cfg(target_os = "windows")]
-        let available_disk_bytes = available_disk_bytes(&std::env::temp_dir())?;
-        #[cfg(target_os = "windows")]
-        let temporary_directory_writable = directory_writable(&std::env::temp_dir());
-        #[cfg(not(target_os = "windows"))]
-        let available_disk_bytes = u64::MAX;
-        #[cfg(not(target_os = "windows"))]
-        let temporary_directory_writable = true;
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        let available_disk_bytes = system_access::available_disk_bytes(&std::env::temp_dir())?;
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        let temporary_directory_writable = system_access::directory_writable(&std::env::temp_dir());
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        let available_disk_bytes = 0;
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        let temporary_directory_writable = false;
         Ok(EnvironmentSnapshot {
             platform,
             architecture: if cfg!(target_arch = "aarch64") {
@@ -1088,23 +1039,14 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     #[test]
     fn production_snapshot_reports_measured_disk_space() {
         let snapshot = CommandRuntime.snapshot().unwrap();
 
+        assert!(snapshot.available_disk_bytes > 0);
         assert!(snapshot.available_disk_bytes < u64::MAX);
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn writability_probe_rejects_a_file_path() {
-        let directory = tempfile::tempdir().unwrap();
-        let file_path = directory.path().join("not-a-directory");
-        std::fs::write(&file_path, b"fixture").unwrap();
-
-        assert!(!directory_writable(&file_path));
-        assert!(directory_writable(directory.path()));
+        assert!(snapshot.temporary_directory_writable);
     }
 
     #[test]

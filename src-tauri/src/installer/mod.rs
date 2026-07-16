@@ -7,6 +7,8 @@ pub mod platform;
 mod policy;
 pub mod probe;
 pub mod repair;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+mod system_access;
 mod task_ids;
 mod task_status;
 pub mod tools;
