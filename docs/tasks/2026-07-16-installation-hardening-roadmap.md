@@ -124,6 +124,11 @@ Status: Complete; the coordinator directly reviewed the Worker commit, fixed one
 
 ### Phase 4 — PATH persistence
 
+Owner: Paseo Worker `ff2a0c4b-085c-4795-81d1-f8874d80baa1`
+Agent workspace: outer project `D:\codex\ai-deploy-toolkit`
+Code workspace: isolated Paseo worktree `phase4-path-persistence`
+Status: In progress
+
 - Implement platform adapters with injected filesystem/registry seams for tests.
 - Prepend exactly one canonical managed executable path after confirmation and preserve unrelated entries byte-for-byte where the platform format permits.
 - Windows refreshes the running process after a successful registry update and restores the prior value on failure.
