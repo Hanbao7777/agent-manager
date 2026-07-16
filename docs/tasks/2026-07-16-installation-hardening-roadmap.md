@@ -64,7 +64,7 @@ Every phase must be implemented as a bounded task. A Worker self-review is neces
 | --- | --- | --- | --- |
 | 0 | Record decisions and execution ledger | Complete | Roadmap commit `211b45db`; Worker aligned to it |
 | 1 | Cross-platform system-access probes | Complete | Accepted commit `b4f7fbd2`; Windows/macOS artifact-free CI passed |
-| 2 | Structured path-access snapshot | Not started | No production sentinel values; managed install/cache paths and volume-aware 1 GiB policy tested |
+| 2 | Structured path-access snapshot | In progress | Worker `0c2cfb53-6abe-4467-85ef-b8642a083ba7`; no production sentinels; managed paths and 1 GiB gates |
 | 3 | Managed latest-version npm installs | Not started | Allowlisted latest resolution, isolated versions, verified atomic activation, two-version retention, 500 MiB cache cap |
 | 4 | Safe user PATH persistence | Not started | Windows rollback/refresh; zsh/bash atomic managed block; malformed marker and unsupported-shell behavior tested |
 | 5 | Lifecycle and confirmation UX | Not started | Single confirmation action, stale-task re-preflight, single active task, bounded retry/cancel/batch semantics tested |
@@ -92,6 +92,9 @@ Acceptance checklist:
 - [x] Windows and macOS GitHub verification both pass with artifact building disabled.
 
 ### Phase 2 — Structured path access
+
+Owner: Paseo Worker `0c2cfb53-6abe-4467-85ef-b8642a083ba7`  
+Workspace: isolated Paseo worktree
 
 - Replace ambiguous production writability booleans with explicit access states without changing test-fixture convenience constructors unnecessarily.
 - Resolve and validate the temporary, managed install, and managed cache paths. Missing directories are evaluated through a safe existing ancestor without creating user data during read-only preflight.
