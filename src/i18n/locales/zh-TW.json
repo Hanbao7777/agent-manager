@@ -23,6 +23,31 @@
     "windowControlFailed": "視窗控制失敗：{{error}}"
   },
   "settings": {
+    "diagnostics": {
+      "create": "建立診斷報告",
+      "title": "診斷報告",
+      "description": "在本機產生已遮蔽敏感資料的報告，不會自動上傳任何內容。",
+      "summary": "發生了什麼？（選填）",
+      "summaryPlaceholder": "請描述問題。預覽前會遮蔽密鑰並將家目錄路徑標準化。",
+      "sensitive": "將此報告標記為敏感，只保留在本機。",
+      "collectedFields": "僅包含應用程式版本、平台、工具狀態、結構化安裝狀態和此描述。絕不收集環境變數或 Shell 設定檔內容。",
+      "issueTitle": "公開 Issue 標題",
+      "issueBody": "公開 Issue 的完整內文",
+      "preview": "產生預覽",
+      "edit": "編輯並重新產生",
+      "send": "傳送給開發者",
+      "exportPath": "本機匯出路徑",
+      "exportPlaceholder": "以 .json 結尾的絕對路徑",
+      "export": "匯出到本機",
+      "exportHint": "僅在你選擇以 .json 結尾的本機絕對路徑後寫入。",
+      "exported": "診斷報告已匯出",
+      "exportFailed": "無法匯出診斷報告，請檢查路徑後再試一次。",
+      "generateFailed": "無法產生診斷報告。",
+      "blocked": {
+        "sensitive": "此報告已標記為敏感，只能匯出到本機。",
+        "oversized": "此報告超過公開 Issue 的保守大小限制，只能匯出到本機。"
+      }
+    },
     "envBadge": {
       "wsl": "WSL",
       "windows": "Win",

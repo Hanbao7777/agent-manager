@@ -23,6 +23,31 @@
     "windowControlFailed": "ウィンドウ操作に失敗しました: {{error}}"
   },
   "settings": {
+    "diagnostics": {
+      "create": "診断レポートを作成",
+      "title": "診断レポート",
+      "description": "ローカルで編集済みレポートを生成します。自動アップロードは行いません。",
+      "summary": "発生したこと（任意）",
+      "summaryPlaceholder": "問題を説明してください。プレビュー前に秘密情報とホームパスを編集します。",
+      "sensitive": "このレポートを機密として扱い、ローカルのみに保存します。",
+      "collectedFields": "アプリのバージョン、プラットフォーム、ツール状態、構造化されたインストール状態、この説明のみを含みます。環境変数やシェルプロファイルの内容は収集しません。",
+      "issueTitle": "公開 Issue のタイトル",
+      "issueBody": "公開 Issue の正確な本文",
+      "preview": "プレビューを生成",
+      "edit": "編集して再生成",
+      "send": "開発者に送る",
+      "exportPath": "ローカル出力先",
+      "exportPlaceholder": ".json で終わる絶対パス",
+      "export": "ローカルに出力",
+      "exportHint": "選択した絶対パスの .json ファイルにのみ出力します。",
+      "exported": "診断レポートを出力しました",
+      "exportFailed": "診断レポートを出力できませんでした。パスを確認して再試行してください。",
+      "generateFailed": "診断レポートを生成できませんでした。",
+      "blocked": {
+        "sensitive": "このレポートは機密として指定されています。ローカル出力のみ利用できます。",
+        "oversized": "このレポートは公開 Issue の保守的なサイズ上限を超えています。ローカル出力のみ利用できます。"
+      }
+    },
     "envBadge": {
       "wsl": "WSL",
       "windows": "Win",

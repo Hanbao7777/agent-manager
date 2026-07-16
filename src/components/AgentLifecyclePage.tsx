@@ -42,6 +42,7 @@ import { isUpdateAvailable } from "@/lib/version";
 import { ToolUpgradeConfirmDialog } from "./settings/ToolUpgradeConfirmDialog";
 import { ToolInstallRow } from "./settings/ToolInstallRow";
 import { ToolInstallDialog } from "./settings/ToolInstallDialog";
+import { DiagnosticReportDialog } from "./settings/DiagnosticReportDialog";
 
 interface ToolVersion {
   name: string;
@@ -1030,6 +1031,14 @@ export function AgentLifecyclePage() {
         <div className="flex flex-col gap-2 px-1 sm:flex-row sm:items-center sm:justify-between">
           <h3 className="text-sm font-medium">{t("settings.localEnvCheck")}</h3>
           <div className="flex flex-wrap items-center gap-2">
+            <DiagnosticReportDialog
+              tools={toolVersions.map((tool) => ({
+                name: tool.name,
+                version: tool.version,
+                installed_but_broken: tool.installed_but_broken,
+                env_type: tool.env_type,
+              }))}
+            />
             <Button
               size="sm"
               variant="outline"

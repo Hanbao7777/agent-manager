@@ -23,6 +23,31 @@
     "windowControlFailed": "Window control failed: {{error}}"
   },
   "settings": {
+    "diagnostics": {
+      "create": "Create diagnostic report",
+      "title": "Diagnostic report",
+      "description": "Generate a local redacted report. Nothing is uploaded automatically.",
+      "summary": "What happened? (optional)",
+      "summaryPlaceholder": "Describe the problem. Secrets and home paths are redacted before preview.",
+      "sensitive": "Treat this report as sensitive and keep it local-only.",
+      "collectedFields": "Only app version, platform, tool status, structured install status, and this description are included. Environment and shell-profile contents are never collected.",
+      "issueTitle": "Public issue title",
+      "issueBody": "Exact public issue body",
+      "preview": "Generate preview",
+      "edit": "Edit and regenerate",
+      "send": "Send to developer",
+      "exportPath": "Local export path",
+      "exportPlaceholder": "Absolute path ending in .json",
+      "export": "Export locally",
+      "exportHint": "Export writes only after you choose an absolute local .json path.",
+      "exported": "Diagnostic report exported",
+      "exportFailed": "Could not export the diagnostic report. Check the path and try again.",
+      "generateFailed": "Could not generate the diagnostic report.",
+      "blocked": {
+        "sensitive": "This report is marked sensitive. It can only be exported locally.",
+        "oversized": "This report exceeds the conservative public issue size limit. It can only be exported locally."
+      }
+    },
     "envBadge": {
       "wsl": "WSL",
       "windows": "Win",

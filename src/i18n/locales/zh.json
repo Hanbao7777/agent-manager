@@ -23,6 +23,31 @@
     "windowControlFailed": "窗口控制失败：{{error}}"
   },
   "settings": {
+    "diagnostics": {
+      "create": "创建诊断报告",
+      "title": "诊断报告",
+      "description": "在本地生成已脱敏的报告，不会自动上传任何内容。",
+      "summary": "发生了什么？（可选）",
+      "summaryPlaceholder": "请描述问题。预览前会脱敏密钥并将主目录路径规范化。",
+      "sensitive": "将此报告标记为敏感，仅保留在本地。",
+      "collectedFields": "仅包含应用版本、平台、工具状态、结构化安装状态和此描述。绝不收集环境变量或 Shell 配置文件内容。",
+      "issueTitle": "公开 Issue 标题",
+      "issueBody": "公开 Issue 的完整正文",
+      "preview": "生成预览",
+      "edit": "编辑并重新生成",
+      "send": "发送给开发者",
+      "exportPath": "本地导出路径",
+      "exportPlaceholder": "以 .json 结尾的绝对路径",
+      "export": "导出到本地",
+      "exportHint": "仅在你选择以 .json 结尾的本地绝对路径后写入。",
+      "exported": "诊断报告已导出",
+      "exportFailed": "无法导出诊断报告，请检查路径后重试。",
+      "generateFailed": "无法生成诊断报告。",
+      "blocked": {
+        "sensitive": "此报告已标记为敏感，只能导出到本地。",
+        "oversized": "此报告超过公开 Issue 的保守大小限制，只能导出到本地。"
+      }
+    },
     "envBadge": {
       "wsl": "WSL",
       "windows": "Win",
