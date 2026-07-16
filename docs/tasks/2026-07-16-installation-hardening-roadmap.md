@@ -110,14 +110,17 @@ Status: Complete; the Worker exhausted its provider quota after producing an unc
 
 Owner: Paseo Worker `b5637e36-6cc6-4a26-9975-a8d2beab02bf`
 Workspace: isolated Paseo worktree `phase3-managed-npm`
-Status: In progress
+Status: Complete; the coordinator directly reviewed the Worker commit, fixed one compiler lifetime error and two cross-platform fixture paths, and accepted the final artifact-free platform evidence.
 
-- Add a fixed package allowlist and resolve `latest` at the start of the confirmed task.
-- Stage into a tool/version-specific directory beneath the managed root. Pass prefix/cache paths as process arguments, never interpolated shell text.
-- Reject unsafe path components and filesystem indirection before every write boundary.
-- Verify the installed executable and version in a clean environment, then atomically update the managed entry point.
-- On failure, keep the previous entry point. Remove only coordinator-owned stale versions/cache and enforce the approved retention caps.
-- Existing writable installations remain in place; switching from an unwritable external installation requires a distinct confirmed plan action.
+- [x] Add a fixed package allowlist and resolve `latest` at the start of the confirmed task.
+- [x] Stage into a tool/version-specific directory beneath the managed root. Pass prefix/cache paths as process arguments, never interpolated shell text.
+- [x] Reject unsafe path components and filesystem indirection before every write boundary.
+- [x] Verify the installed executable and version in a clean environment, then atomically update the managed entry point.
+- [x] On failure, keep the previous entry point. Remove only coordinator-owned stale versions/cache and enforce the approved retention caps.
+- [x] Existing writable installations remain in place; switching from an unwritable external installation requires a distinct confirmed plan action.
+- [x] Fifteen focused managed-install tests cover allowlisting, single resolution, argv safety, clean verification, rollback, atomic activation, retention, cache ownership/cap, path blocking, and external-install decisions.
+- [x] Coordinator inspected all four changed files and reran local formatting, metadata, and diff validation.
+- [x] Final Windows and macOS workflows pass 198 Rust tests with artifact building disabled.
 
 ### Phase 4 — PATH persistence
 
@@ -185,3 +188,4 @@ Packaging is allowed only after Phases 1–7 are accepted. Publishing a stable r
 | 2026-07-16 | Baseline | `edde7196` | `29437251201` (prior Windows baseline at `84081271`) | `29459832606` | Accepted as starting point | Both artifact-free workflows passed; Phase 1 Worker active |
 | 2026-07-16 | 1 | `b4f7fbd2` | `29461965986` | `29461967206` | Accepted | Worker `bed6b7e2-5e36-4c66-9545-bed410d7c733`; Windows 6m50s, macOS 3m14s; all checks/tests passed; packaging skipped |
 | 2026-07-16 | 2 | `a1a9fa72` | `29463081793` | `29463081895` | Accepted | Worker draft salvaged after provider quota failure; coordinator fixed unsafe disk-path fallback; Windows 7m19s, macOS 3m28s; all checks/tests passed; packaging skipped |
+| 2026-07-16 | 3 | `478888df` | `29467359477` | `29467359532` | Accepted | Worker `b5637e36-6cc6-4a26-9975-a8d2beab02bf` produced `12dab1bb`, integrated as `fd17d61b`; coordinator fixes `0e7642fb` and `478888df`; initial compiler/test failures were stopped and fixed, one Windows registry timeout was retried once; final Windows 6m59s, macOS 3m54s; 198 Rust tests passed; packaging skipped |
