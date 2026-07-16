@@ -9,11 +9,10 @@ use std::{
 use super::{
     aggregate_tool_outcomes, build_repair_plan, next_sequence_from_task_ids, node_policy,
     parse_command_version_output, replace_file, resolve_pair_with_refresh, system_access,
-    unique_temporary_path, AggregatedTaskStatus, CleanEnvironment, ConfirmedInstallRequest,
-    EnvironmentSnapshot, InstallFailure, InstallFailureCode, InstallPreparation, InstallRequest,
-    InstallStage, InstallTaskResult, InstallTaskSnapshot, InstallTaskStatus, PairSource,
-    RecommendedAction, RepairPlan, ResolvedNodeNpmPair, ToolId, ToolInstallResult,
-    ToolInstallStatus, ToolOutcome,
+    unique_temporary_path, AggregatedTaskStatus, ConfirmedInstallRequest, EnvironmentSnapshot,
+    InstallFailure, InstallFailureCode, InstallPreparation, InstallRequest, InstallStage,
+    InstallTaskResult, InstallTaskSnapshot, InstallTaskStatus, PairSource, RecommendedAction,
+    RepairPlan, ResolvedNodeNpmPair, ToolId, ToolInstallResult, ToolInstallStatus, ToolOutcome,
 };
 
 use std::{
@@ -24,7 +23,10 @@ use std::{
 pub trait OrchestratorRuntime: Send + Sync {
     fn snapshot(&self) -> Result<EnvironmentSnapshot, InstallFailure>;
     fn repair(&self, _plan: &RepairPlan) -> Result<(), InstallFailure>;
-    fn install_tool(&self, tool: ToolId) -> ToolInstallResult;
+    fn managed_switch_required(&self, _tool: ToolId) -> Result<bool, InstallFailure> {
+        Ok(false)
+    }
+    fn install_tool(&self, tool: ToolId, managed_switch_confirmed: bool) -> ToolInstallResult;
 }
 
 #[derive(Clone)]
@@ -143,7 +145,19 @@ impl InstallTaskStore {
         mut request: InstallRequest,
         runtime: &R,
     ) -> Result<InstallPreparation, InstallFailure> {
-        let plan = build_repair_plan(&runtime.snapshot()?, &node_policy())?;
+        let mut plan = build_repair_plan(&runtime.snapshot()?, &node_policy())?;
+        let mut switch_tools = HashSet::new();
+        for tool in request.tools.iter().copied() {
+            if switch_tools.insert(tool) && runtime.managed_switch_required(tool)? {
+                plan.actions.push(super::RepairAction {
+                    id: managed_switch_action_id(tool),
+                    kind: super::RepairActionKind::SwitchToManagedInstallation,
+                    requires_confirmation: true,
+                    requires_elevation: false,
+                    status: super::ActionStatus::Pending,
+                });
+            }
+        }
         let task_id = request.task_id.clone().unwrap_or_else(|| {
             format!(
                 "install-{}",
@@ -419,7 +433,13 @@ impl InstallTaskStore {
                 self.emit_terminal(&task_id, &mut emit);
                 return Ok(task_id);
             }
-            let result = runtime.install_tool(tool);
+            let result = runtime.install_tool(
+                tool,
+                task.plan
+                    .actions
+                    .iter()
+                    .any(|action| action.id == managed_switch_action_id(tool)),
+            );
             emit(super::InstallTaskEvent::ToolFinished {
                 task_id: task_id.clone(),
                 result: result.clone(),
@@ -584,6 +604,13 @@ fn validate_confirmed_request(
     Ok(())
 }
 
+fn managed_switch_action_id(tool: ToolId) -> String {
+    let identity = super::tool_strategy(tool)
+        .map(|strategy| strategy.command_name)
+        .unwrap_or("unsupported");
+    format!("switch-{identity}-to-managed")
+}
+
 fn is_terminal_cancellation(task: &InstallTaskSnapshot) -> bool {
     task.cancellation_requested
         && task.stage == InstallStage::Completed
@@ -683,8 +710,15 @@ impl OrchestratorRuntime for CommandRuntime {
 
     fn repair(&self, plan: &RepairPlan) -> Result<(), InstallFailure> {
         use super::RepairActionKind;
-        if plan
+        let dependency_actions: Vec<_> = plan
             .actions
+            .iter()
+            .filter(|action| action.kind != RepairActionKind::SwitchToManagedInstallation)
+            .collect();
+        if dependency_actions.is_empty() {
+            return Ok(());
+        }
+        if dependency_actions
             .iter()
             .all(|action| action.kind == RepairActionKind::RefreshEnvironment)
         {
@@ -726,77 +760,97 @@ impl OrchestratorRuntime for CommandRuntime {
             .block_on(install)
     }
 
-    fn install_tool(&self, tool: ToolId) -> ToolInstallResult {
+    fn managed_switch_required(&self, tool: ToolId) -> Result<bool, InstallFailure> {
+        let strategy = super::tool_strategy(tool)
+            .ok_or_else(|| failure(InstallFailureCode::ToolInstallFailure, "unsupported tool"))?;
+        if strategy.method != super::ToolInstallMethod::Npm {
+            return Ok(false);
+        }
+        let (managed_root, _) = managed_directories()?;
+        Ok(external_installation(strategy.command_name, &managed_root)
+            .is_some_and(|(_, _, writable)| !writable))
+    }
+
+    fn install_tool(&self, tool: ToolId, managed_switch_confirmed: bool) -> ToolInstallResult {
         let Some(strategy) = super::tool_strategy(tool) else {
             return tool_failure(tool, "unsupported tool");
         };
-        // Official installers without a Node dependency retain their npm
-        // fallback where one is declared; this avoids silently selecting an
-        // unrelated package for Hermes.
-        let package = strategy.npm_package.or(strategy.fallback_npm_package);
-        let output = match package {
-            Some(package) => {
-                let pair = match resolve_node_npm_pair() {
-                    Ok(pair) => pair,
-                    Err(detail) => return tool_failure(tool, &detail),
+        if strategy.method != super::ToolInstallMethod::Npm {
+            return tool_failure(
+                tool,
+                "no approved verified official installer is available; npm fallback was not selected",
+            );
+        }
+        let (managed_root, cache_root) = match managed_directories() {
+            Ok(paths) => paths,
+            Err(error) => {
+                return ToolInstallResult {
+                    tool,
+                    status: ToolInstallStatus::Failed,
+                    version: None,
+                    path: None,
+                    failure: Some(error),
                 };
-                let environment = selected_pair_environment(&pair);
-                command_with_environment(&pair.npm, &environment)
-                    .args(["install", "--global", package])
-                    .output()
             }
-            None if tool == ToolId::Hermes => {
-                return tool_failure(tool, "no approved verified Hermes installer available");
-            }
-            None => return tool_failure(tool, "no approved installer available"),
         };
-        match output {
-            Ok(output) if output.status.success() => {
-                let pair = resolve_node_npm_pair().ok();
-                let environment = pair.as_ref().map(selected_pair_environment);
-                let path = environment.as_ref().and_then(|environment| {
-                    resolve_in_environment(strategy.command_name, environment)
-                });
-                let version = match (path.as_deref(), environment.as_ref()) {
-                    (Some(path), Some(environment)) => {
-                        command_version_in_environment(path, environment)
-                    }
-                    _ => None,
-                };
-                match version {
-                    Some(version) => ToolInstallResult {
+        if let Some((existing, version, writable)) =
+            external_installation(strategy.command_name, &managed_root)
+        {
+            let decision = super::managed_npm::decide_managed_install(
+                super::managed_npm::ExistingCliInstallation::External {
+                    runnable: version.is_some(),
+                    writable,
+                },
+            );
+            match decision {
+                super::managed_npm::ManagedInstallDecision::PreserveExternal => {
+                    return ToolInstallResult {
                         tool,
                         status: ToolInstallStatus::Succeeded,
-                        version: Some(version),
-                        path: path.map(|path| path.display().to_string()),
+                        version,
+                        path: Some(existing.display().to_string()),
                         failure: None,
-                    },
-                    None => ToolInstallResult {
-                        tool,
-                        status: ToolInstallStatus::InstalledNotRunnable,
-                        version: None,
-                        path: path.map(|path| path.display().to_string()),
-                        failure: Some(failure(
-                            InstallFailureCode::VerificationFailure,
-                            "installed command did not return a version",
-                        )),
-                    },
+                    };
                 }
+                super::managed_npm::ManagedInstallDecision::SwitchToManagedRequiresConfirmation
+                    if !managed_switch_confirmed =>
+                {
+                    return tool_failure(
+                        tool,
+                        "external installation is unwritable; switching to a managed installation requires a distinct confirmed action",
+                    );
+                }
+                _ => {}
             }
-            Ok(output) => ToolInstallResult {
-                tool,
-                status: ToolInstallStatus::Failed,
-                version: None,
-                path: None,
-                failure: Some(super::classify_process_failure(
-                    InstallStage::InstallingTools,
-                    output.status.code(),
-                    &String::from_utf8_lossy(&output.stdout),
-                    &String::from_utf8_lossy(&output.stderr),
-                )),
-            },
-            Err(error) => tool_failure(tool, &error.to_string()),
         }
+        let pair = match resolve_node_npm_pair() {
+            Ok(pair) => pair,
+            Err(detail) => return tool_failure(tool, &detail),
+        };
+        let managed_tool = match super::managed_npm::ManagedNpmTool::from_tool(tool) {
+            Ok(tool) => tool,
+            Err(error) => {
+                return ToolInstallResult {
+                    tool,
+                    status: ToolInstallStatus::Failed,
+                    version: None,
+                    path: None,
+                    failure: Some(error),
+                };
+            }
+        };
+        super::managed_npm::install_managed_npm_tool(super::managed_npm::ManagedNpmRequest {
+            tool: managed_tool,
+            platform: if cfg!(target_os = "windows") {
+                super::Platform::Windows
+            } else {
+                super::Platform::Macos
+            },
+            npm_path: pair.npm,
+            node_path: pair.node,
+            managed_root,
+            cache_root,
+        })
     }
 }
 
@@ -822,6 +876,14 @@ fn managed_directories() -> Result<(PathBuf, PathBuf), InstallFailure> {
     })?;
     let root = home.join(".agent-manager");
     Ok((root.join("npm"), root.join("cache").join("npm")))
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn managed_directories() -> Result<(PathBuf, PathBuf), InstallFailure> {
+    Err(failure(
+        InstallFailureCode::UnsupportedPlatform,
+        "native installer is limited to Windows and macOS",
+    ))
 }
 
 fn host_adapter() -> Option<Box<dyn super::PlatformAdapter>> {
@@ -862,6 +924,27 @@ fn resolve_host_command(name: &str, entries: &[PathBuf]) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
+fn external_installation(
+    command_name: &str,
+    managed_root: &Path,
+) -> Option<(PathBuf, Option<String>, bool)> {
+    let entries: Vec<PathBuf> =
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect();
+    let existing = resolve_host_command(command_name, &entries)?;
+    if existing.starts_with(managed_root.join("bin")) {
+        return None;
+    }
+    let version = command_version(&existing);
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    let writable = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&existing)
+        .is_ok();
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let writable = false;
+    Some((existing, version, writable))
+}
+
 fn resolve_node_npm_pair() -> Result<ResolvedNodeNpmPair, String> {
     let entries: Vec<PathBuf> =
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect();
@@ -884,42 +967,6 @@ fn resolve_node_npm_pair() -> Result<ResolvedNodeNpmPair, String> {
             PairSource::RefreshedEnvironment => "refreshed-environment",
         },
     })
-}
-
-fn selected_pair_environment(pair: &ResolvedNodeNpmPair) -> CleanEnvironment {
-    super::selected_environment(
-        &CleanEnvironment {
-            path_entries: std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-                .collect(),
-        },
-        pair,
-    )
-}
-
-fn command_with_environment(
-    program: &Path,
-    environment: &CleanEnvironment,
-) -> std::process::Command {
-    let mut command = std::process::Command::new(program);
-    if let Ok(path) = std::env::join_paths(&environment.path_entries) {
-        command.env("PATH", path);
-    }
-    command
-}
-
-fn resolve_in_environment(name: &str, environment: &CleanEnvironment) -> Option<PathBuf> {
-    resolve_host_command(name, &environment.path_entries)
-}
-
-fn command_version_in_environment(path: &Path, environment: &CleanEnvironment) -> Option<String> {
-    let output = command_with_environment(path, environment)
-        .arg("--version")
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    parse_command_version_output(&String::from_utf8_lossy(&output.stdout))
 }
 
 fn command_version(path: &Path) -> Option<String> {
@@ -960,7 +1007,7 @@ mod tests {
         fn repair(&self, _: &RepairPlan) -> Result<(), InstallFailure> {
             Ok(())
         }
-        fn install_tool(&self, tool: ToolId) -> ToolInstallResult {
+        fn install_tool(&self, tool: ToolId, _: bool) -> ToolInstallResult {
             ToolInstallResult {
                 tool,
                 status: ToolInstallStatus::Succeeded,
@@ -969,6 +1016,79 @@ mod tests {
                 failure: None,
             }
         }
+    }
+
+    struct ManagedSwitchFake;
+
+    impl OrchestratorRuntime for ManagedSwitchFake {
+        fn snapshot(&self) -> Result<EnvironmentSnapshot, InstallFailure> {
+            Fake.snapshot()
+        }
+
+        fn repair(&self, plan: &RepairPlan) -> Result<(), InstallFailure> {
+            Fake.repair(plan)
+        }
+
+        fn managed_switch_required(&self, tool: ToolId) -> Result<bool, InstallFailure> {
+            Ok(tool == ToolId::Codex)
+        }
+
+        fn install_tool(&self, tool: ToolId, confirmed: bool) -> ToolInstallResult {
+            assert!(confirmed);
+            Fake.install_tool(tool, false)
+        }
+    }
+
+    #[test]
+    fn unwritable_external_installation_adds_a_distinct_confirmed_switch_action() {
+        let store = InstallTaskStore::default();
+        let request = InstallRequest {
+            task_id: Some("managed-switch".into()),
+            tools: vec![ToolId::Codex],
+            action: super::super::InstallAction::Install,
+        };
+        let preparation = store.prepare(request.clone(), &ManagedSwitchFake).unwrap();
+        let action = preparation
+            .plan
+            .actions
+            .iter()
+            .find(|action| action.id == "switch-codex-to-managed")
+            .unwrap();
+        assert_eq!(
+            action.kind,
+            super::super::RepairActionKind::SwitchToManagedInstallation
+        );
+        assert!(action.requires_confirmation);
+        assert!(!action.requires_elevation);
+        store
+            .start(
+                ConfirmedInstallRequest {
+                    request,
+                    confirmed_action_ids: preparation
+                        .plan
+                        .actions
+                        .iter()
+                        .map(|action| action.id.clone())
+                        .collect(),
+                },
+                &ManagedSwitchFake,
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn managed_switch_action_does_not_trigger_dependency_repair() {
+        let plan = RepairPlan {
+            actions: vec![super::super::RepairAction {
+                id: "switch-codex-to-managed".into(),
+                kind: super::super::RepairActionKind::SwitchToManagedInstallation,
+                requires_confirmation: true,
+                requires_elevation: false,
+                status: super::super::ActionStatus::Pending,
+            }],
+        };
+
+        CommandRuntime.repair(&plan).unwrap();
     }
     #[test]
     fn unconfirmed_privileged_plan_is_rejected() {
@@ -1068,12 +1188,14 @@ mod tests {
 
     #[test]
     fn hermes_install_fails_closed_without_a_verified_installer() {
-        let result = CommandRuntime.install_tool(ToolId::Hermes);
+        let result = CommandRuntime.install_tool(ToolId::Hermes, false);
 
         assert_eq!(result.status, ToolInstallStatus::Failed);
         assert_eq!(
             result.failure.unwrap().detail.as_deref(),
-            Some("no approved verified Hermes installer available")
+            Some(
+                "no approved verified official installer is available; npm fallback was not selected"
+            )
         );
     }
 
@@ -1303,13 +1425,13 @@ mod tests {
                 Fake.repair(plan)
             }
 
-            fn install_tool(&self, tool: ToolId) -> ToolInstallResult {
+            fn install_tool(&self, tool: ToolId, _: bool) -> ToolInstallResult {
                 self.store.cancel("cancel-during-tool").unwrap();
                 let task = self.store.get("cancel-during-tool").unwrap();
                 assert_eq!(task.stage, InstallStage::InstallingTools);
                 assert!(task.cancellation_requested);
                 assert!(task.result.is_none());
-                Fake.install_tool(tool)
+                Fake.install_tool(tool, false)
             }
         }
 

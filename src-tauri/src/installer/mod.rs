@@ -1,5 +1,6 @@
 mod atomic_file;
 pub mod failure;
+mod managed_npm;
 mod model;
 mod node_pair_resolution;
 pub mod orchestrator;

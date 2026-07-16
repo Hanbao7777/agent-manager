@@ -31,7 +31,7 @@ pub struct PathAccess {
     pub detail: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolId {
     Claude,
@@ -78,6 +78,7 @@ pub enum RepairActionKind {
     RepairNode,
     RefreshEnvironment,
     InstallNpm,
+    SwitchToManagedInstallation,
     UpdatePath,
 }
 
@@ -515,6 +516,14 @@ mod tests {
 
         assert!(!action.requires_confirmation);
         assert!(action.requires_elevation);
+    }
+
+    #[test]
+    fn managed_switch_action_has_a_stable_wire_name() {
+        assert_eq!(
+            serde_json::to_value(RepairActionKind::SwitchToManagedInstallation).unwrap(),
+            "switch_to_managed_installation"
+        );
     }
 
     #[test]
