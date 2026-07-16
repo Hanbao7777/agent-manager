@@ -19,6 +19,7 @@ static PROFILE_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PathPersistenceRequest {
     pub(crate) managed_bin: PathBuf,
+    pub(crate) approved_runtime_dirs: Vec<PathBuf>,
     pub(crate) managed_executable: PathBuf,
     pub(crate) executable_name: String,
     pub(crate) expected_version: String,
@@ -30,6 +31,7 @@ impl PathPersistenceRequest {
     fn windows_fixture() -> Self {
         Self {
             managed_bin: PathBuf::from(r"C:\managed\bin"),
+            approved_runtime_dirs: vec![PathBuf::from(r"C:\runtime")],
             managed_executable: PathBuf::from(r"C:\managed\bin\codex.cmd"),
             executable_name: "codex".into(),
             expected_version: "1.0.0".into(),
@@ -41,6 +43,7 @@ impl PathPersistenceRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PathProbeRequest {
     pub(crate) managed_bin: PathBuf,
+    pub(crate) approved_runtime_dirs: Vec<PathBuf>,
     pub(crate) managed_executable: PathBuf,
     pub(crate) executable_name: String,
     pub(crate) expected_version: String,
@@ -51,6 +54,7 @@ impl From<&PathPersistenceRequest> for PathProbeRequest {
     fn from(request: &PathPersistenceRequest) -> Self {
         Self {
             managed_bin: request.managed_bin.clone(),
+            approved_runtime_dirs: request.approved_runtime_dirs.clone(),
             managed_executable: request.managed_executable.clone(),
             executable_name: request.executable_name.clone(),
             expected_version: request.expected_version.clone(),
@@ -73,7 +77,7 @@ pub(crate) struct ProcessPathProbe;
 
 impl CleanPathProbe for ProcessPathProbe {
     fn probe(&self, request: &PathProbeRequest) -> Result<PathProbeResult, InstallFailure> {
-        let path = std::env::join_paths(std::iter::once(request.managed_bin.as_path()))
+        let path = std::env::join_paths(clean_probe_paths(request))
             .map_err(|error| path_failure(&format!("failed to construct clean PATH: {error}")))?;
         let mut command = std::process::Command::new(&request.executable_name);
         command.arg("--version").env_clear().env("PATH", path);
@@ -112,6 +116,19 @@ impl CleanPathProbe for ProcessPathProbe {
             shadowed,
         })
     }
+}
+
+fn clean_probe_paths(request: &PathProbeRequest) -> Vec<PathBuf> {
+    let mut paths = vec![request.managed_bin.clone()];
+    for runtime in &request.approved_runtime_dirs {
+        if !paths
+            .iter()
+            .any(|existing| paths_equivalent(existing, runtime))
+        {
+            paths.push(runtime.clone());
+        }
+    }
+    paths
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -778,6 +795,30 @@ mod tests {
     }
 
     #[test]
+    fn clean_probe_path_keeps_managed_bin_first_and_only_approved_runtime_dirs() {
+        let request = PathProbeRequest {
+            managed_bin: PathBuf::from("managed/bin"),
+            approved_runtime_dirs: vec![
+                PathBuf::from("runtime/node"),
+                PathBuf::from("runtime/npm"),
+                PathBuf::from("runtime/node"),
+            ],
+            managed_executable: PathBuf::from("managed/bin/codex"),
+            executable_name: "codex".into(),
+            expected_version: "1.0.0".into(),
+            external_candidates: vec![PathBuf::from("ambient/codex")],
+        };
+        assert_eq!(
+            clean_probe_paths(&request),
+            vec![
+                PathBuf::from("managed/bin"),
+                PathBuf::from("runtime/node"),
+                PathBuf::from("runtime/npm"),
+            ]
+        );
+    }
+
+    #[test]
     fn macos_profile_append_and_replace_preserve_unrelated_bytes() {
         let managed = dirs::home_dir().unwrap().join(".agent-manager/npm/bin");
         let original = b"export EDITOR=vim\r\n";
@@ -850,6 +891,7 @@ mod tests {
         let managed = dirs::home_dir().unwrap().join(".agent-manager/npm/bin");
         let request = PathPersistenceRequest {
             managed_bin: managed.clone(),
+            approved_runtime_dirs: Vec::new(),
             managed_executable: managed.join("codex"),
             executable_name: "codex".into(),
             expected_version: "1.0.0".into(),
@@ -1120,6 +1162,7 @@ mod tests {
         let managed = dirs::home_dir().unwrap().join(".agent-manager/npm/bin");
         let request = PathPersistenceRequest {
             managed_bin: managed.clone(),
+            approved_runtime_dirs: Vec::new(),
             managed_executable: managed.join("codex"),
             executable_name: "codex".into(),
             expected_version: "1.0.0".into(),
@@ -1146,6 +1189,7 @@ mod tests {
         let managed = dirs::home_dir().unwrap().join(".agent-manager/npm/bin");
         let request = PathPersistenceRequest {
             managed_bin: managed.clone(),
+            approved_runtime_dirs: Vec::new(),
             managed_executable: managed.join("codex"),
             executable_name: "codex".into(),
             expected_version: "1.0.0".into(),
@@ -1155,5 +1199,47 @@ mod tests {
 
         assert!(persist_macos_path(&mut store, &Probe { fail: true }, &request).is_err());
         assert_eq!(store.removed, 1);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn std_macos_store_replaces_in_same_directory_and_preserves_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let profile = root.path().join(".zprofile");
+        std::fs::write(&profile, b"old").unwrap();
+        std::fs::set_permissions(&profile, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let mut store = StdMacosProfileStore {
+            profile: profile.clone(),
+        };
+
+        store.atomic_replace(b"new", Some(0o640)).unwrap();
+
+        assert_eq!(std::fs::read(&profile).unwrap(), b"new");
+        assert_eq!(
+            std::fs::metadata(&profile).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+        assert!(std::fs::read_dir(root.path()).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains(".zprofile.")));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn std_macos_store_cleans_temporary_file_after_rename_failure() {
+        let root = tempfile::tempdir().unwrap();
+        let profile = root.path().join(".bash_profile");
+        std::fs::create_dir(&profile).unwrap();
+        let mut store = StdMacosProfileStore { profile };
+
+        assert!(store.atomic_replace(b"new", None).is_err());
+        assert!(std::fs::read_dir(root.path()).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains(".bash_profile.")));
     }
 }

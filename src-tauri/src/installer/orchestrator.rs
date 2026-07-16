@@ -844,6 +844,7 @@ impl OrchestratorRuntime for CommandRuntime {
             }
         };
         let managed_bin = managed_root.join("bin");
+        let approved_runtime_dirs = approved_runtime_directories(&pair);
         let mut result =
             super::managed_npm::install_managed_npm_tool(super::managed_npm::ManagedNpmRequest {
                 tool: managed_tool,
@@ -868,6 +869,7 @@ impl OrchestratorRuntime for CommandRuntime {
         };
         let request = super::path_persistence::PathPersistenceRequest {
             managed_bin,
+            approved_runtime_dirs,
             managed_executable: executable,
             executable_name: strategy.command_name.into(),
             expected_version: version,
@@ -903,6 +905,21 @@ where
             ..result
         },
     }
+}
+
+fn approved_runtime_directories(pair: &ResolvedNodeNpmPair) -> Vec<PathBuf> {
+    [pair.node.parent(), pair.npm.parent()]
+        .into_iter()
+        .flatten()
+        .fold(Vec::new(), |mut directories, directory| {
+            if !directories
+                .iter()
+                .any(|existing| paths_equal(existing, directory))
+            {
+                directories.push(directory.to_path_buf());
+            }
+            directories
+        })
 }
 
 #[cfg(target_os = "windows")]
@@ -1135,6 +1152,7 @@ mod tests {
     fn persistence_request() -> super::super::path_persistence::PathPersistenceRequest {
         super::super::path_persistence::PathPersistenceRequest {
             managed_bin: PathBuf::from("managed/bin"),
+            approved_runtime_dirs: vec![PathBuf::from("runtime")],
             managed_executable: PathBuf::from("managed/bin/codex"),
             executable_name: "codex".into(),
             expected_version: "1.0.0".into(),
