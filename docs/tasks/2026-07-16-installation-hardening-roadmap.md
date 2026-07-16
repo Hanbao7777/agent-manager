@@ -67,7 +67,7 @@ Every phase must be implemented as a bounded task. A Worker self-review is neces
 | 2 | Structured path-access snapshot | Complete | Accepted commit `a1a9fa72`; Windows/macOS artifact-free CI passed |
 | 3 | Managed latest-version npm installs | Complete | Accepted through `478888df`; Windows/macOS artifact-free CI passed |
 | 4 | Safe user PATH persistence | Complete | Accepted through `22e907f6`; Windows/macOS artifact-free CI passed |
-| 5 | Lifecycle and confirmation UX | In progress | Worker `c7e9d56b-9c12-427e-915c-0fa4b6eb88e2`; isolated worktree `phase5-lifecycle-ux` |
+| 5 | Lifecycle and confirmation UX | Complete | Accepted through `8b061682`; Windows/macOS artifact-free CI passed |
 | 6 | Opt-in diagnostic reporting | Not started | Redaction fixtures, local preview, prefilled GitHub Issue, no embedded credential or silent upload |
 | 7 | CI hardening and dual-platform gates | Not started | Pinned Actions; bounded Windows and Apple Silicon success; Intel release-candidate workflow |
 | 8 | Controlled acceptance and packaging | Not started | Small Windows Sandbox pass, beta evidence, one retained Windows package set, one macOS DMG, ZIPs preserved |
@@ -139,14 +139,19 @@ Status: Complete; the coordinator directly reviewed three Worker commits, requir
 
 ### Phase 5 — Lifecycle and UX
 
-Owner: Paseo Worker `c7e9d56b-9c12-427e-915c-0fa4b6eb88e2`
-Workspace: isolated Paseo worktree `phase5-lifecycle-ux`
-Status: In progress
+Owner: Paseo Worker `012c2a82-b2e1-4d2a-96de-0bb286ddbf72`
+Workspace: isolated Paseo worktree `phase5-lifecycle-ux-v2`
+Status: Complete; the coordinator directly reviewed three Worker commits, corrected formatting and stale frontend expectations, updated cancellation-aware Rust test fixtures, and accepted the final artifact-free platform evidence.
 
-- Extend repair action types for managed-install switching and user PATH changes; show target paths and authorization impact.
-- Replace mandatory checkboxes with one explicit confirmation control while retaining optional controls only where an action is genuinely optional.
-- Add a single-use stale-task recovery path and localized public failure; preserve the server-side request/task binding check.
-- Enforce one active task, bounded retry classes, installer cancellation boundaries, and independent batch results.
+- [x] Extend repair action types for managed-install switching and user PATH changes; show target paths and authorization impact.
+- [x] Replace mandatory checkboxes with one localized **Confirm and continue** control while retaining optional controls only where an action is genuinely optional.
+- [x] Bind confirmation to server-owned task identity, allow exactly one refreshed preparation, and terminate repeated stale or mismatched confirmation with a localized state-changed result.
+- [x] Enforce one globally active task and release the task claim on terminal, rejected, cancelled, and refreshed-invalidated paths.
+- [x] Retry only bounded transient network failures; never retry TLS, integrity, signature, authorization, or installer failures.
+- [x] Propagate cancellation through downloads and retry backoff, stop between tools, and never kill an active native MSI/PKG process.
+- [x] Keep batch tool results independent and clear frontend busy/task state on every terminal outcome.
+- [x] Coordinator inspected all changed backend, frontend, test, and locale files and required focused follow-up fixes for refresh and cancellation boundaries.
+- [x] Final Windows workflow passes 228 Rust tests and 7 frontend test files; macOS passes 237 Rust tests and 7 frontend test files, with artifact building disabled.
 
 ### Phase 6 — Diagnostic reporting
 
@@ -201,3 +206,4 @@ Packaging is allowed only after Phases 1–7 are accepted. Publishing a stable r
 | 2026-07-16 | 2 | `a1a9fa72` | `29463081793` | `29463081895` | Accepted | Worker draft salvaged after provider quota failure; coordinator fixed unsafe disk-path fallback; Windows 7m19s, macOS 3m28s; all checks/tests passed; packaging skipped |
 | 2026-07-16 | 3 | `478888df` | `29467359477` | `29467359532` | Accepted | Worker `b5637e36-6cc6-4a26-9975-a8d2beab02bf` produced `12dab1bb`, integrated as `fd17d61b`; coordinator fixes `0e7642fb` and `478888df`; initial compiler/test failures were stopped and fixed, one Windows registry timeout was retried once; final Windows 6m59s, macOS 3m54s; 198 Rust tests passed; packaging skipped |
 | 2026-07-16 | 4 | `22e907f6` | `29472460229` | `29472461331` | Accepted | Worker `c5ebc1e4-d6a3-4fe3-899e-354f4143eedb` produced `9dfeb99a`, `ca6b0d0c`, and `095254a1`, integrated as `6e7771ab`, `26c6ec10`, and `e66cb48a`; coordinator fixes `44570771` and `22e907f6`; initial macOS compile failure and Windows fixture failures were stopped and fixed; final Windows 217 tests, macOS 226 tests; packaging skipped |
+| 2026-07-16 | 5 | `8b061682` | `29481429453` | `29481431389` | Accepted | Worker `012c2a82-b2e1-4d2a-96de-0bb286ddbf72` produced `9815d482`, `d5cb619a`, and `aea4c1eb`, integrated as `e8302eba`, `1f7cec55`, and `820dceed`; coordinator fixes `138a8422`, `b87bbd42`, and `8b061682`; formatting, frontend expectation, and Rust fixture failures were fixed before acceptance; final Windows 228 Rust tests, macOS 237 Rust tests, and 7 frontend test files on both; packaging skipped |
