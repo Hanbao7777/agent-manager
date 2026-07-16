@@ -67,7 +67,7 @@ Every phase must be implemented as a bounded task. A Worker self-review is neces
 | 2 | Structured path-access snapshot | Complete | Accepted commit `a1a9fa72`; Windows/macOS artifact-free CI passed |
 | 3 | Managed latest-version npm installs | Complete | Accepted through `478888df`; Windows/macOS artifact-free CI passed |
 | 4 | Safe user PATH persistence | Complete | Accepted through `22e907f6`; Windows/macOS artifact-free CI passed |
-| 5 | Lifecycle and confirmation UX | Not started | Single confirmation action, stale-task re-preflight, single active task, bounded retry/cancel/batch semantics tested |
+| 5 | Lifecycle and confirmation UX | In progress | Worker `c7e9d56b-9c12-427e-915c-0fa4b6eb88e2`; isolated worktree `phase5-lifecycle-ux` |
 | 6 | Opt-in diagnostic reporting | Not started | Redaction fixtures, local preview, prefilled GitHub Issue, no embedded credential or silent upload |
 | 7 | CI hardening and dual-platform gates | Not started | Pinned Actions; bounded Windows and Apple Silicon success; Intel release-candidate workflow |
 | 8 | Controlled acceptance and packaging | Not started | Small Windows Sandbox pass, beta evidence, one retained Windows package set, one macOS DMG, ZIPs preserved |
@@ -138,6 +138,10 @@ Status: Complete; the coordinator directly reviewed three Worker commits, requir
 - [x] Final Windows workflow passes 217 Rust tests and macOS passes 226 Rust tests with artifact building disabled.
 
 ### Phase 5 — Lifecycle and UX
+
+Owner: Paseo Worker `c7e9d56b-9c12-427e-915c-0fa4b6eb88e2`
+Workspace: isolated Paseo worktree `phase5-lifecycle-ux`
+Status: In progress
 
 - Extend repair action types for managed-install switching and user PATH changes; show target paths and authorization impact.
 - Replace mandatory checkboxes with one explicit confirmation control while retaining optional controls only where an action is genuinely optional.
