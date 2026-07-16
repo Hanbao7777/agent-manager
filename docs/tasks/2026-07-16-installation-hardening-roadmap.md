@@ -68,7 +68,7 @@ Every phase must be implemented as a bounded task. A Worker self-review is neces
 | 3 | Managed latest-version npm installs | Complete | Accepted through `478888df`; Windows/macOS artifact-free CI passed |
 | 4 | Safe user PATH persistence | Complete | Accepted through `22e907f6`; Windows/macOS artifact-free CI passed |
 | 5 | Lifecycle and confirmation UX | Complete | Accepted through `8b061682`; Windows/macOS artifact-free CI passed |
-| 6 | Opt-in diagnostic reporting | Not started | Redaction fixtures, local preview, prefilled GitHub Issue, no embedded credential or silent upload |
+| 6 | Opt-in diagnostic reporting | Complete | Accepted through `39026a8b`; Windows/macOS artifact-free CI passed |
 | 7 | CI hardening and dual-platform gates | Not started | Pinned Actions; bounded Windows and Apple Silicon success; Intel release-candidate workflow |
 | 8 | Controlled acceptance and packaging | Not started | Small Windows Sandbox pass, beta evidence, one retained Windows package set, one macOS DMG, ZIPs preserved |
 
@@ -155,9 +155,19 @@ Status: Complete; the coordinator directly reviewed three Worker commits, correc
 
 ### Phase 6 — Diagnostic reporting
 
-- Produce a local structured report with deterministic redaction and home-path normalization to `~`.
-- Show the exact report before transmission. The send action opens a prefilled Issue creation URL; the user remains responsible for final submission.
-- Sensitive or oversized diagnostics remain local and are exported as a user-controlled file rather than placed in a public issue.
+Owner: Paseo Worker `44bb589b-c314-4c75-8787-b2599c2e96d2`
+Workspace: isolated Paseo worktree `phase6-diagnostic-reporting`
+Status: Complete; the coordinator directly reviewed three Worker commits, required a focused security/UX follow-up, corrected frontend formatting and a macOS symlink-aware test fixture, and accepted the final artifact-free platform evidence.
+
+- [x] Produce an allowlisted local structured report with deterministic secret, credential, environment-assignment, username, and home-path redaction.
+- [x] Normalize Windows and macOS/Linux home paths to `~` without collecting environment values or shell-profile contents.
+- [x] Show the exact public Issue title and body before enabling the send action.
+- [x] Bind public Issue opening to a server-stored report ID and fixed GitHub repository URL; the frontend never supplies an arbitrary URL and no shell interpolation is used.
+- [x] Explain that GitHub opens for a second review and that the user remains responsible for final submission; no token, HTTP upload, or silent submission path exists.
+- [x] Keep reports marked sensitive, over 6 KiB body, or over 8 KiB encoded URL local-only.
+- [x] Export only to a new user-supplied absolute `.json` path using same-directory temporary creation, atomic publication, symlink-ancestor rejection, cleanup on failure, and no overwrite.
+- [x] Coordinator inspected all backend, UI, API, tests, and locale changes and verified the public/private boundary and report identity handling.
+- [x] Final Windows workflow passes 237 Rust tests and 9 frontend test files; macOS passes 246 Rust tests and 9 frontend test files, with artifact building disabled.
 
 ### Phase 7 — CI hardening
 
@@ -207,3 +217,4 @@ Packaging is allowed only after Phases 1–7 are accepted. Publishing a stable r
 | 2026-07-16 | 3 | `478888df` | `29467359477` | `29467359532` | Accepted | Worker `b5637e36-6cc6-4a26-9975-a8d2beab02bf` produced `12dab1bb`, integrated as `fd17d61b`; coordinator fixes `0e7642fb` and `478888df`; initial compiler/test failures were stopped and fixed, one Windows registry timeout was retried once; final Windows 6m59s, macOS 3m54s; 198 Rust tests passed; packaging skipped |
 | 2026-07-16 | 4 | `22e907f6` | `29472460229` | `29472461331` | Accepted | Worker `c5ebc1e4-d6a3-4fe3-899e-354f4143eedb` produced `9dfeb99a`, `ca6b0d0c`, and `095254a1`, integrated as `6e7771ab`, `26c6ec10`, and `e66cb48a`; coordinator fixes `44570771` and `22e907f6`; initial macOS compile failure and Windows fixture failures were stopped and fixed; final Windows 217 tests, macOS 226 tests; packaging skipped |
 | 2026-07-16 | 5 | `8b061682` | `29481429453` | `29481431389` | Accepted | Worker `012c2a82-b2e1-4d2a-96de-0bb286ddbf72` produced `9815d482`, `d5cb619a`, and `aea4c1eb`, integrated as `e8302eba`, `1f7cec55`, and `820dceed`; coordinator fixes `138a8422`, `b87bbd42`, and `8b061682`; formatting, frontend expectation, and Rust fixture failures were fixed before acceptance; final Windows 228 Rust tests, macOS 237 Rust tests, and 7 frontend test files on both; packaging skipped |
+| 2026-07-16 | 6 | `39026a8b` | `29484602699` | `29484604504` | Accepted | Worker `44bb589b-c314-4c75-8787-b2599c2e96d2` produced `89fd1de4`, `a0950823`, and follow-up `d27b37aa`, integrated as `8367fffd`, `45ef8b7d`, and `53ea0d4e`; coordinator fixes `9d3d386c` and `39026a8b`; initial macOS export tests correctly exposed `/var` as a symlinked ancestor and fixtures were canonicalized without weakening production policy; final Windows 237 Rust tests, macOS 246 Rust tests, and 9 frontend test files on both; packaging skipped |
