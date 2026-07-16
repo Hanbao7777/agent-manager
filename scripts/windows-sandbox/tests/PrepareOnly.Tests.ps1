@@ -39,16 +39,8 @@ Describe 'Windows Sandbox smoke prepare-only contract' {
         $config.Configuration.VGpu | Should Be 'Disable'
         $config.Configuration.MemoryInMB | Should Be '2048'
         $controlManifest = Get-Content (Join-Path $control 'manifest.json') -Raw | ConvertFrom-Json
-        $payload = [ordered]@{
-            schema = [int]$controlManifest.schema
-            run_id = [string]$controlManifest.run_id
-            scenario = [string]$controlManifest.scenario
-            network_mode = [string]$controlManifest.network_mode
-            files = @($controlManifest.files | Sort-Object { [string]$_.path } | ForEach-Object {
-                    [ordered]@{ path = [string]$_.path; length = [int64]$_.length; sha256 = [string]$_.sha256 }
-                })
-        }
-        $payloadJson = $payload | ConvertTo-Json -Depth 8 -Compress
+        . (Join-Path $root 'ManifestContract.ps1')
+        $payloadJson = Get-ManifestPayloadJson $controlManifest
         $computed = [BitConverter]::ToString(([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($payloadJson)))).Replace('-','').ToLowerInvariant()
         $computed | Should Be $controlManifest.manifest_sha256
     }

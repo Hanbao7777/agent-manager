@@ -11,6 +11,7 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'ManifestContract.ps1')
 
 function Get-FullPath([string]$Path) { return [IO.Path]::GetFullPath((Resolve-Path -LiteralPath $Path).Path) }
 function Assert-File([string]$Path) {
@@ -41,19 +42,6 @@ function Assert-Checksum([string]$Checksums, [string]$File) {
     $actual = (Get-FileHash -LiteralPath $File -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($expected -ne $actual) { throw "Checksum mismatch: $name" }
 }
-function Get-ManifestPayloadJson($Manifest) {
-    $payload = [ordered]@{
-        schema = [int]$Manifest.schema
-        run_id = [string]$Manifest.run_id
-        scenario = [string]$Manifest.scenario
-        network_mode = [string]$Manifest.network_mode
-        files = @($Manifest.files | Sort-Object { [string]$_.path } | ForEach-Object {
-                [ordered]@{ path = [string]$_.path; length = [int64]$_.length; sha256 = [string]$_.sha256 }
-            })
-    }
-    return ($payload | ConvertTo-Json -Depth 8 -Compress)
-}
-
 if ($PrepareOnly -and $Launch) { throw 'Choose -PrepareOnly or -Launch, not both.' }
 $msi = Assert-File $MsiPath; $portable = Assert-File $PortableZipPath; $sums = Assert-File $ChecksumsPath
 if ($WebView2Path) { $webview = Assert-File $WebView2Path } else { $webview = $null }

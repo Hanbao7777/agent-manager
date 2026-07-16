@@ -56,18 +56,6 @@ function Complete-Run([array]$Steps, [string]$Status, [string]$ManifestHash) {
             steps = $Steps
     })
 }
-function Get-ManifestPayloadJson($Manifest) {
-    $payload = [ordered]@{
-        schema = [int]$Manifest.schema
-        run_id = [string]$Manifest.run_id
-        scenario = [string]$Manifest.scenario
-        network_mode = [string]$Manifest.network_mode
-        files = @($Manifest.files | Sort-Object { [string]$_.path } | ForEach-Object {
-                [ordered]@{ path = [string]$_.path; length = [int64]$_.length; sha256 = [string]$_.sha256 }
-            })
-    }
-    return ($payload | ConvertTo-Json -Depth 8 -Compress)
-}
 $manifest = Get-Content -LiteralPath (Join-Path $inputRoot 'manifest.json') -Raw | ConvertFrom-Json
 $manifestHash = [string]$manifest.manifest_sha256
 if ($manifestHash -notmatch '^[0-9a-f]{64}$') { throw 'Manifest hash is not a lowercase SHA-256 value.' }
