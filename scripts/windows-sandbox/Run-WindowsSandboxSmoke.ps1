@@ -99,13 +99,18 @@ $artifactGate = $steps[-1]
 if ($artifactGate.status -ne 'passed') { Complete-Run $steps 'failed' $manifestHash; exit 1 }
 $steps += Invoke-Step 'offline-webview2-prerequisite' {
     $installer = Join-Path $inputRoot 'MicrosoftEdgeWebView2RuntimeInstallerX64.exe'
-    $guid = '{F1E7E8E1-6A69-4E0F-8C2C-9F6F5D5F0A3A}'
-    $runtime = @(
+    $guid = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+    $runtimeVersion = @(
         "HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\$guid",
         "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\$guid",
         "HKCU:\SOFTWARE\Microsoft\EdgeUpdate\Clients\$guid"
-    ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-    if ($runtime) { New-Record 'webview2.json' ([ordered]@{ status = 'already-installed' }) }
+    ) | ForEach-Object {
+        if (Test-Path -LiteralPath $_) {
+            $version = (Get-ItemProperty -LiteralPath $_ -Name 'pv' -ErrorAction SilentlyContinue).pv
+            if ($version -and $version -ne '0.0.0.0') { $version }
+        }
+    } | Select-Object -First 1
+    if ($runtimeVersion) { New-Record 'webview2.json' ([ordered]@{ status = 'already-installed'; version = $runtimeVersion }) }
     elseif (-not (Test-Path -LiteralPath $installer)) { throw 'WebView2 runtime is absent and no staged installer exists.' }
     else {
         $signature = Get-AuthenticodeSignature -LiteralPath $installer

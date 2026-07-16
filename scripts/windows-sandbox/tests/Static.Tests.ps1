@@ -36,10 +36,12 @@ Describe 'Windows Sandbox smoke harness static contract' {
     }
     It 'uses the approved Evergreen WebView2 client GUID and registry views' {
         $text = Get-Content (Join-Path $root 'Run-WindowsSandboxSmoke.ps1') -Raw
-        $text | Should Match '\{F1E7E8E1-6A69-4E0F-8C2C-9F6F5D5F0A3A\}'
+        $text | Should Match '\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5\}'
         $text | Should Match 'WOW6432Node'
         $text | Should Match 'HKCU:'
-        $text | Should Not Match 'F1A7E1A2'
+        $text | Should Match "-Name 'pv'"
+        $text | Should Match "0\.0\.0\.0"
+        $text | Should Not Match 'F1E7E8E1'
     }
     It 'recomputes the manifest payload hash independently before the artifact gate' {
         $text = Get-Content (Join-Path $root 'Run-WindowsSandboxSmoke.ps1') -Raw
