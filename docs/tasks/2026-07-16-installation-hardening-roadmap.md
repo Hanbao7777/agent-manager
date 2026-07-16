@@ -93,7 +93,7 @@ Acceptance checklist:
 
 ### Phase 2 — Structured path access
 
-Owner: Paseo Worker `0c2cfb53-6abe-4467-85ef-b8642a083ba7`  
+Owner: Paseo Worker `0c2cfb53-6abe-4467-85ef-b8642a083ba7`
 Workspace: isolated Paseo worktree
 
 - Replace ambiguous production writability booleans with explicit access states without changing test-fixture convenience constructors unnecessarily.
