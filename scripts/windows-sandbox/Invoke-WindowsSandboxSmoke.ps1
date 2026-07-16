@@ -113,6 +113,7 @@ Write-Output "Prepared run $runId"
 Write-Output "Config: $wsbPath"
 if ($Launch) {
     if (-not (Get-Command WindowsSandbox.exe -ErrorAction SilentlyContinue)) { throw 'WindowsSandbox.exe is not available.' }
-    & WindowsSandbox.exe $wsbPath
-    if ($LASTEXITCODE -ne 0) { throw "Windows Sandbox failed with exit code $LASTEXITCODE." }
+    $sandbox = Start-Process -FilePath $wsbPath -PassThru
+    if (-not $sandbox) { throw 'Windows Sandbox did not start from the reviewed configuration.' }
+    Write-Output "Launched Windows Sandbox process $($sandbox.Id)"
 }

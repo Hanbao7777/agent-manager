@@ -15,6 +15,8 @@ Describe 'Windows Sandbox smoke harness static contract' {
         $text | Should Match '<VideoInput>Disable</VideoInput>'
         $text | Should Match '<VGpu>Disable</VGpu>'
         $text | Should Match '\$Launch'
+        $text | Should Match 'Start-Process -FilePath \$wsbPath'
+        $text | Should Not Match '& WindowsSandbox\.exe \$wsbPath'
         $text | Should Not Match 'test\\</HostFolder>'
     }
     It 'finalizes evidence with complete.json after required smoke steps' {
