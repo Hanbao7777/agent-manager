@@ -69,7 +69,7 @@ Every phase must be implemented as a bounded task. A Worker self-review is neces
 | 4 | Safe user PATH persistence | Complete | Accepted through `22e907f6`; Windows/macOS artifact-free CI passed |
 | 5 | Lifecycle and confirmation UX | Complete | Accepted through `8b061682`; Windows/macOS artifact-free CI passed |
 | 6 | Opt-in diagnostic reporting | Complete | Accepted through `39026a8b`; Windows/macOS artifact-free CI passed |
-| 7 | CI hardening and dual-platform gates | Not started | Pinned Actions; bounded Windows and Apple Silicon success; Intel release-candidate workflow |
+| 7 | CI hardening and dual-platform gates | Complete | Accepted through `03f07021`; Windows, Apple Silicon, and Intel artifact-free CI passed |
 | 8 | Controlled acceptance and packaging | Not started | Small Windows Sandbox pass, beta evidence, one retained Windows package set, one macOS DMG, ZIPs preserved |
 
 ## Phase details
@@ -171,10 +171,19 @@ Status: Complete; the coordinator directly reviewed three Worker commits, requir
 
 ### Phase 7 — CI hardening
 
-- Update deprecated first-party Actions and pin every third-party Action to a reviewed full SHA.
-- Keep default verification manual/bounded and artifact-free: 15-minute job cap and 12-minute Rust step caps.
-- Windows and Apple Silicon must pass after each accepted phase. Intel runs for release candidates or architecture-sensitive changes.
-- A first failure stops the phase. Do not trigger packaging to diagnose a compile/test failure.
+Owner: Paseo Worker `7b3b3150-d5ad-4b8f-9cfd-63ce5253bbc3`
+Workspace: isolated Paseo worktree `phase7-ci-hardening`
+Status: Complete; the coordinator directly reviewed both Worker commits, corrected an exact Rust toolchain identity mismatch exposed by the first Intel run, and accepted the final three-platform artifact-free evidence.
+
+- [x] Pin all 28 remote workflow Action references to reviewed 40-character commit SHAs with version comments and a repository audit script.
+- [x] Upgrade `actions/checkout` and `actions/setup-node` to Node.js 24-based releases; the final logs contain no Node.js 20 deprecation warning.
+- [x] Add monthly GitHub Actions Dependabot proposals with a five-PR limit and no automatic merge path.
+- [x] Run the default macOS gate on standard `macos-15` Apple Silicon and expose standard `macos-15-intel` only through the explicit release-candidate input.
+- [x] Scope concurrency by ref and selected architecture so Apple Silicon and Intel can run together while duplicate same-gate runs cancel stale predecessors.
+- [x] Preserve manual, artifact-free defaults, 15-minute job caps, 12-minute Rust check/test caps, permissions, and conditional artifact steps.
+- [x] Align the repository and workflow on the exact Rust `1.95.0` toolchain identity after the first Intel validation exposed that rustup kept `1.95` and `1.95.0` targets separately.
+- [x] Coordinator verified all Action tag/SHA mappings, Node.js 24 action manifests, workflow YAML, pin audit, permissions, runner labels, timeouts, concurrency, and artifact gates.
+- [x] Final Windows passes 237 Rust tests and 9 frontend test files; Apple Silicon and Intel each pass 246 Rust tests and 9 frontend test files, with packaging and upload steps skipped.
 
 ### Phase 8 — Acceptance, storage, and release
 
@@ -218,3 +227,4 @@ Packaging is allowed only after Phases 1–7 are accepted. Publishing a stable r
 | 2026-07-16 | 4 | `22e907f6` | `29472460229` | `29472461331` | Accepted | Worker `c5ebc1e4-d6a3-4fe3-899e-354f4143eedb` produced `9dfeb99a`, `ca6b0d0c`, and `095254a1`, integrated as `6e7771ab`, `26c6ec10`, and `e66cb48a`; coordinator fixes `44570771` and `22e907f6`; initial macOS compile failure and Windows fixture failures were stopped and fixed; final Windows 217 tests, macOS 226 tests; packaging skipped |
 | 2026-07-16 | 5 | `8b061682` | `29481429453` | `29481431389` | Accepted | Worker `012c2a82-b2e1-4d2a-96de-0bb286ddbf72` produced `9815d482`, `d5cb619a`, and `aea4c1eb`, integrated as `e8302eba`, `1f7cec55`, and `820dceed`; coordinator fixes `138a8422`, `b87bbd42`, and `8b061682`; formatting, frontend expectation, and Rust fixture failures were fixed before acceptance; final Windows 228 Rust tests, macOS 237 Rust tests, and 7 frontend test files on both; packaging skipped |
 | 2026-07-16 | 6 | `39026a8b` | `29484602699` | `29484604504` | Accepted | Worker `44bb589b-c314-4c75-8787-b2599c2e96d2` produced `89fd1de4`, `a0950823`, and follow-up `d27b37aa`, integrated as `8367fffd`, `45ef8b7d`, and `53ea0d4e`; coordinator fixes `9d3d386c` and `39026a8b`; initial macOS export tests correctly exposed `/var` as a symlinked ancestor and fixtures were canonicalized without weakening production policy; final Windows 237 Rust tests, macOS 246 Rust tests, and 9 frontend test files on both; packaging skipped |
+| 2026-07-16 | 7 | `03f07021` | `29487729698` | Apple Silicon `29487732265`; Intel `29487014508` | Accepted | Worker `7b3b3150-d5ad-4b8f-9cfd-63ce5253bbc3` produced `f8e9987c` and `0ee3e2ae`, integrated as `44f00d5d` and `64f468fb`; coordinator fix `03f07021`; first Intel run `29486833207` exposed the `1.95`/`1.95.0` rustup identity mismatch, so Windows `29486816720` and Apple Silicon `29486825231` were cancelled immediately before the focused fix; final Windows 237 Rust tests, both macOS architectures 246 Rust tests, and 9 frontend test files on all three; packaging and uploads skipped |
