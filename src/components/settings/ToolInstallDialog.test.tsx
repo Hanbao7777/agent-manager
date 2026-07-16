@@ -421,7 +421,7 @@ describe("ToolInstallDialog", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("shows diagnostics and retries a retryable task failure", () => {
+  it("shows a localized failure and retries a retryable task failure", () => {
     const onRetry = vi.fn();
 
     render(
@@ -458,7 +458,8 @@ describe("ToolInstallDialog", () => {
     );
 
     expect(screen.getByText("Network request timed out")).toBeInTheDocument();
-    expect(screen.getByText("Diagnostics")).toBeInTheDocument();
+    expect(screen.queryByText("Diagnostics")).not.toBeInTheDocument();
+    expect(screen.queryByText("request timed out")).not.toBeInTheDocument();
     expect(screen.queryByText("network_timeout")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));

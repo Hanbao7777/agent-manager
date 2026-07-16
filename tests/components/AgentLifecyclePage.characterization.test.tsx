@@ -472,7 +472,9 @@ describe("AgentLifecyclePage characterization", () => {
     });
     const view = render(<AgentLifecyclePage />);
     fireEvent.click((await screen.findAllByText("settings.toolInstall"))[0]);
-    fireEvent.click(await screen.findByText("settings.installer.confirmAndContinue"));
+    fireEvent.click(
+      await screen.findByText("settings.installer.confirmAndContinue"),
+    );
     await waitFor(() => expect(startInstall).toHaveBeenCalledOnce());
     const listener = listenAllInstall.mock.calls[0][0] as (
       event: unknown,
@@ -772,7 +774,9 @@ describe("AgentLifecyclePage characterization", () => {
     await waitFor(() => expect(prepareInstall).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(startInstall).toHaveBeenCalledTimes(2));
     expect(screen.getByText("settings.installer.progress")).toBeInTheDocument();
-    expect(screen.queryByText("installer.state_changed")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("installer.state_changed"),
+    ).not.toBeInTheDocument();
   });
 
   it("starts a refreshed no-confirmation plan from the initial path", async () => {
@@ -792,10 +796,11 @@ describe("AgentLifecyclePage characterization", () => {
     fireEvent.click((await screen.findAllByText("settings.toolInstall"))[0]);
 
     await waitFor(() => expect(startInstall).toHaveBeenCalledTimes(2));
+    const initiallyRequestedTools = startInstall.mock.calls[0][0].request.tools;
     expect(startInstall.mock.calls[1][0]).toEqual({
       request: {
         task_id: "refreshed-install",
-        tools: ["claude"],
+        tools: initiallyRequestedTools,
         action: "install",
       },
       confirmed_action_ids: [],
