@@ -64,9 +64,9 @@ Every phase must be implemented as a bounded task. A Worker self-review is neces
 | --- | --- | --- | --- |
 | 0 | Record decisions and execution ledger | Complete | Roadmap commit `211b45db`; Worker aligned to it |
 | 1 | Cross-platform system-access probes | Complete | Accepted commit `b4f7fbd2`; Windows/macOS artifact-free CI passed |
-| 2 | Structured path-access snapshot | In progress | Worker `0c2cfb53-6abe-4467-85ef-b8642a083ba7`; no production sentinels; managed paths and 1 GiB gates |
-| 3 | Managed latest-version npm installs | Not started | Allowlisted latest resolution, isolated versions, verified atomic activation, two-version retention, 500 MiB cache cap |
-| 4 | Safe user PATH persistence | Not started | Windows rollback/refresh; zsh/bash atomic managed block; malformed marker and unsupported-shell behavior tested |
+| 2 | Structured path-access snapshot | Complete | Accepted commit `a1a9fa72`; Windows/macOS artifact-free CI passed |
+| 3 | Managed latest-version npm installs | Complete | Accepted through `478888df`; Windows/macOS artifact-free CI passed |
+| 4 | Safe user PATH persistence | Complete | Accepted through `22e907f6`; Windows/macOS artifact-free CI passed |
 | 5 | Lifecycle and confirmation UX | Not started | Single confirmation action, stale-task re-preflight, single active task, bounded retry/cancel/batch semantics tested |
 | 6 | Opt-in diagnostic reporting | Not started | Redaction fixtures, local preview, prefilled GitHub Issue, no embedded credential or silent upload |
 | 7 | CI hardening and dual-platform gates | Not started | Pinned Actions; bounded Windows and Apple Silicon success; Intel release-candidate workflow |
@@ -124,16 +124,18 @@ Status: Complete; the coordinator directly reviewed the Worker commit, fixed one
 
 ### Phase 4 — PATH persistence
 
-Owner: Paseo Worker `ff2a0c4b-085c-4795-81d1-f8874d80baa1`
-Agent workspace: outer project `D:\codex\ai-deploy-toolkit`
+Owner: Paseo Worker `c5ebc1e4-d6a3-4fe3-899e-354f4143eedb`
+Agent workspace: isolated Paseo worktree `phase4-path-persistence`, with required rules read from the outer project
 Code workspace: isolated Paseo worktree `phase4-path-persistence`
-Status: In progress
+Status: Complete; the coordinator directly reviewed three Worker commits, required two focused hardening follow-ups, fixed one compiler type inference error and one cross-platform fixture-path failure, and accepted the final artifact-free platform evidence.
 
-- Implement platform adapters with injected filesystem/registry seams for tests.
-- Prepend exactly one canonical managed executable path after confirmation and preserve unrelated entries byte-for-byte where the platform format permits.
-- Windows refreshes the running process after a successful registry update and restores the prior value on failure.
-- macOS edits only one well-formed managed block for zsh/bash via atomic replacement. No persistent full-profile backup or profile logging is permitted.
-- Re-probe from a clean process environment and expose both the selected managed path and shadowed external candidates.
+- [x] Implement platform adapters with injected filesystem/registry, shell-selection, and final-persistence seams for tests.
+- [x] Prepend exactly one canonical managed executable path only after confirmed managed installation and preserve unrelated entries byte-for-byte where the platform format permits.
+- [x] Windows updates only current-user PATH, refreshes the running process, broadcasts the change, and restores exact prior registry/process state on failure.
+- [x] macOS edits only one canonical managed block for zsh/bash via same-directory atomic replacement, rejects malformed or indirect profiles, preserves permissions, and cleans temporary files without persistent backups or profile logging.
+- [x] Re-probe with managed bin first plus only approved Node/npm runtime directories; expose the selected managed path and non-executed shadowed external candidates.
+- [x] Coordinator inspected all seven changed files and the follow-up fixes; local formatting, locked metadata, and diff checks pass.
+- [x] Final Windows workflow passes 217 Rust tests and macOS passes 226 Rust tests with artifact building disabled.
 
 ### Phase 5 — Lifecycle and UX
 
@@ -194,3 +196,4 @@ Packaging is allowed only after Phases 1–7 are accepted. Publishing a stable r
 | 2026-07-16 | 1 | `b4f7fbd2` | `29461965986` | `29461967206` | Accepted | Worker `bed6b7e2-5e36-4c66-9545-bed410d7c733`; Windows 6m50s, macOS 3m14s; all checks/tests passed; packaging skipped |
 | 2026-07-16 | 2 | `a1a9fa72` | `29463081793` | `29463081895` | Accepted | Worker draft salvaged after provider quota failure; coordinator fixed unsafe disk-path fallback; Windows 7m19s, macOS 3m28s; all checks/tests passed; packaging skipped |
 | 2026-07-16 | 3 | `478888df` | `29467359477` | `29467359532` | Accepted | Worker `b5637e36-6cc6-4a26-9975-a8d2beab02bf` produced `12dab1bb`, integrated as `fd17d61b`; coordinator fixes `0e7642fb` and `478888df`; initial compiler/test failures were stopped and fixed, one Windows registry timeout was retried once; final Windows 6m59s, macOS 3m54s; 198 Rust tests passed; packaging skipped |
+| 2026-07-16 | 4 | `22e907f6` | `29472460229` | `29472461331` | Accepted | Worker `c5ebc1e4-d6a3-4fe3-899e-354f4143eedb` produced `9dfeb99a`, `ca6b0d0c`, and `095254a1`, integrated as `6e7771ab`, `26c6ec10`, and `e66cb48a`; coordinator fixes `44570771` and `22e907f6`; initial macOS compile failure and Windows fixture failures were stopped and fixed; final Windows 217 tests, macOS 226 tests; packaging skipped |
