@@ -53,4 +53,15 @@ Describe 'Windows Sandbox guided install contract' {
         $text | Should Match 'Another Windows Sandbox scenario is already running'
         $text | Should Match 'runtime root cannot be a reparse point'
     }
+
+    It 'uses bounded waits and explicit installer exit codes' {
+        $root = Split-Path $PSScriptRoot -Parent
+        $text = Get-Content (Join-Path $root 'Run-WindowsSandboxGuidedInstall.ps1') -Raw
+        $text | Should Match 'New-Object Diagnostics\.ProcessStartInfo'
+        $text | Should Match '\$process\.WaitForExit\(\$TimeoutSeconds \* 1000\)'
+        $text | Should Match 'return \[int\]\$process\.ExitCode'
+        $text | Should Match '\$webviewExitCode = Invoke-ProcessBounded'
+        $text | Should Match '\$msiExitCode = Invoke-ProcessBounded'
+        $text | Should Not Match 'Start-Process -FilePath \$webview'
+    }
 }

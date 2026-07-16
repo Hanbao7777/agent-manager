@@ -13,11 +13,20 @@ function New-Record([string]$Name, $Value) {
     try { $stream.Write(($Value | ConvertTo-Json -Depth 8)) } finally { $stream.Dispose(); $file.Dispose() }
 }
 function Quote-ProcessArgument([string]$Value) { return '"' + $Value.Replace('"', '\"') + '"' }
-function Wait-ProcessBounded($Process, [int]$TimeoutSeconds, [string]$Name) {
-    if (-not $Process.WaitForExit($TimeoutSeconds * 1000)) {
-        try { Stop-Process -Id $Process.Id -Force } catch {}
+function Invoke-ProcessBounded([string]$FilePath, [string]$Arguments, [int]$TimeoutSeconds, [string]$Name) {
+    $startInfo = New-Object Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $FilePath
+    $startInfo.Arguments = $Arguments
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $process = New-Object Diagnostics.Process
+    $process.StartInfo = $startInfo
+    if (-not $process.Start()) { throw "$Name did not start." }
+    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+        try { Stop-Process -Id $process.Id -Force } catch {}
         throw "$Name timed out after $TimeoutSeconds seconds."
     }
+    return [int]$process.ExitCode
 }
 function Get-InstalledApp {
     $candidate = Join-Path $env:LOCALAPPDATA 'Programs\Agent Manager\agent-manager.exe'
@@ -49,14 +58,13 @@ try {
     $webview = Join-Path $inputRoot 'MicrosoftEdgeWebView2RuntimeInstallerX64.exe'
     $signature = Get-AuthenticodeSignature -LiteralPath $webview
     if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Microsoft') { throw 'WebView2 signature is invalid.' }
-    $webviewProcess = Start-Process -FilePath $webview -ArgumentList @('/silent','/install') -PassThru -NoNewWindow
-    Wait-ProcessBounded $webviewProcess 180 'WebView2 installation'
-    if ($webviewProcess.ExitCode -notin @(0, 1638)) { throw "WebView2 installer exit $($webviewProcess.ExitCode)" }
+    $webviewExitCode = Invoke-ProcessBounded $webview '/silent /install' 180 'WebView2 installation'
+    if ($webviewExitCode -notin @(0, 1638)) { throw "WebView2 installer exit $webviewExitCode" }
 
     $msiLog = Join-Path $evidence 'agent-manager-install.log'
-    $msi = Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/i', (Quote-ProcessArgument (Join-Path $inputRoot 'Agent-Manager.msi')), '/qn', '/norestart', '/L*v', (Quote-ProcessArgument $msiLog)) -PassThru
-    Wait-ProcessBounded $msi 120 'Agent Manager installation'
-    if ($msi.ExitCode -ne 0) { throw "Agent Manager MSI exit $($msi.ExitCode)" }
+    $msiArguments = '/i ' + (Quote-ProcessArgument (Join-Path $inputRoot 'Agent-Manager.msi')) + ' /qn /norestart /L*v ' + (Quote-ProcessArgument $msiLog)
+    $msiExitCode = Invoke-ProcessBounded 'msiexec.exe' $msiArguments 120 'Agent Manager installation'
+    if ($msiExitCode -ne 0) { throw "Agent Manager MSI exit $msiExitCode" }
 
     $appPath = Get-InstalledApp
     if (-not $appPath) { throw 'Installed Agent Manager executable was not found.' }
@@ -70,4 +78,3 @@ try {
     New-Record 'startup-failed.json' ([ordered]@{ schema = 1; run_id = $RunId; status = 'failed'; error = $_.Exception.Message; failed_utc = [DateTime]::UtcNow.ToString('o') })
     exit 1
 }
-
