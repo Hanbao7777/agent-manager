@@ -1372,8 +1372,8 @@ mod tests {
             Fake.snapshot()
         }
 
-        fn repair(&self, plan: &RepairPlan, _: &AtomicBool) -> Result<(), InstallFailure> {
-            Fake.repair(plan)
+        fn repair(&self, plan: &RepairPlan, cancelled: &AtomicBool) -> Result<(), InstallFailure> {
+            Fake.repair(plan, cancelled)
         }
 
         fn managed_switch_required(&self, tool: ToolId) -> Result<bool, InstallFailure> {
@@ -1436,7 +1436,8 @@ mod tests {
             }],
         };
 
-        CommandRuntime.repair(&plan).unwrap();
+        let cancelled = AtomicBool::new(false);
+        CommandRuntime.repair(&plan, &cancelled).unwrap();
     }
     #[test]
     fn unconfirmed_privileged_plan_is_rejected() {
@@ -1953,8 +1954,12 @@ mod tests {
                 Fake.snapshot()
             }
 
-            fn repair(&self, plan: &RepairPlan, _: &AtomicBool) -> Result<(), InstallFailure> {
-                Fake.repair(plan)
+            fn repair(
+                &self,
+                plan: &RepairPlan,
+                cancelled: &AtomicBool,
+            ) -> Result<(), InstallFailure> {
+                Fake.repair(plan, cancelled)
             }
 
             fn install_tool(&self, tool: ToolId, _: bool) -> ToolInstallResult {
