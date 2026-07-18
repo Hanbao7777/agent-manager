@@ -30,7 +30,7 @@ chrono = { version = "0.4", features = ["serde"] }
 tauri = { version = "2.8.2", features = ["protocol-asset"] }
 tauri-plugin-log = "2"
 tauri-plugin-window-state = "2"
-dirs = "5.0"
+dirs = "6.0"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "socks"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
 rustls = "0.23"
@@ -46,7 +46,7 @@ tauri-plugin-single-instance = "2"
 webkit2gtk = { version = "2.0.1", features = ["v2_16"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-winreg = "0.52"
+winreg = "0.55"
 windows-sys = { version = "0.61", features = ["Win32_Globalization", "Win32_UI_Shell"] }
 
 # Optimize release binary size to help reduce AppImage footprint
